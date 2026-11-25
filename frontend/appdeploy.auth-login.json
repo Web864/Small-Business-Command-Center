@@ -1,0 +1,18 @@
+{
+  "methods": [
+    "google",
+    "apple",
+    "x",
+    "email"
+  ],
+  "headline": "Welcome to Command Center",
+  "subtitle": "Sign in to manage your shop and profile.",
+  "style": {
+    "mode": "light",
+    "accentColor": "#1a8472",
+    "backgroundColor": "#f6f8fb",
+    "panelColor": "#ffffff",
+    "textColor": "#182b39",
+    "borderRadius": 14
+  }
+}

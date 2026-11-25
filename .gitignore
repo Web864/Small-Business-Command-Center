@@ -1,0 +1,11 @@
+/backend/.env
+/backend/.env.*
+!/backend/.env.example
+/backend/vendor/
+/backend/.phpunit.result.cache
+/backend/bootstrap/cache/*.php
+/backend/storage/app/private/*
+!/backend/storage/app/private/.gitkeep
+/frontend/node_modules/
+/frontend/dist/
+/PROJECT_CLEANUP_REPORT.md
