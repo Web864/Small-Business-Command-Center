@@ -72,5 +72,5 @@ test('hosted admin and license actions map to local endpoints',async()=>{
   await c.api.post('/api/license/redeem',{licenseKey:'synthetic-key',deviceId:'qa-device'});
   assert.equal(JSON.parse(c.calls.at(-1).body).installation,'qa-device');
   await c.auth.signInWithRedirect();
-  assert.equal(c.calls.at(-1).redirect,'/local-login');
+  assert.equal(c.calls.at(-1).redirect,'/login');
 });

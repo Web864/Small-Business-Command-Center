@@ -1,0 +1,5 @@
+# 07 — Hosting and Deployment Readiness
+**Requirements:** PHP ≥8.2 with pdo_pgsql, mbstring, openssl, fileinfo, tokenizer, xml; Composer 2; Node ≥20 for the build; PostgreSQL (version NOT VERIFIED — jsonb, advisory locks used); HTTPS; web root = `backend/public`.
+**Deploy steps (proposed, untested):** `composer install --no-dev -o`; copy `.env.production.example` to `.env`; `php artisan key:generate`; set DB creds, `APP_URL`, `TRUSTED_PROXIES`, `SBCC_PRIMARY_OWNER_EMAIL`; `php artisan migrate --force`; `cd frontend && npm ci && npm run build:laravel`; `php artisan sbcc:create-owner ...`; `config:cache`, `route:cache`; permissions on `storage` and `bootstrap/cache`.
+**Added on branch:** `public/.htaccess`, `storage/framework/*` and `storage/logs` placeholders, production env template, security headers, proxy trust, SPA serving with 503 when unbuilt.
+**Still missing / blockers:** CI/CD; Dockerfile or server config for nginx; backup and restore tested; monitoring and error reporting; mail (reset/verify); CSP; log rotation; rollback procedure; HTTPS cookie must be enabled (`SESSION_SECURE_COOKIE=true`). Provider compatibility: NOT VERIFIED (no provider named).

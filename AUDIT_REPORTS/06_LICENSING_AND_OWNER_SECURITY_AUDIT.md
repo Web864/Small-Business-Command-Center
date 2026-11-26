@@ -1,0 +1,6 @@
+# 06 — Licensing and Owner Security (static)
+**Lifecycle implemented:** issue (manager only, 256-bit random key shown once, digest stored) → redeem (key + matching buyer email + one licence per account) → bind one installation UUID → release / re-activate → manager reset or revoke. Server enforces on each protected request via `X-SBCC-Installation`; revoked/missing licence returns 403 with codes `LICENSE_REVOKED`/`LICENSE_REQUIRED`/`DEVICE_MISMATCH`.
+**Not implemented:** expiry, renewal, trial, suspension (only revoke), payment-triggered issuance, licence-event emails.
+**Bypass questions:** changing frontend JS cannot unlock data (server checks) — VERIFIED by reading. An ordinary user cannot issue/revoke (`manager()` check). Device binding is weak: any holder of the UUID can send the header (A-09). A copied browser profile bypasses the one-device rule.
+**Owner:** Primary Owner = `role=owner` AND email equals server env `SBCC_PRIMARY_OWNER_EMAIL`; promotion only via CLI (`consoleOnly`), advisory-locked and audited. No web backdoor found. Risk: email squatting before bootstrap (A-08) — create the owner account first, with `sbcc:create-owner`, before opening registration. `changeRole` has no route, so no admins can be created from the app.
+**Verdict:** not commercial-ready (A-06, A-09).
