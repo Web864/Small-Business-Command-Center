@@ -53,8 +53,13 @@ import {
   Bell,
   Clock3,
   Star,
+  Archive,
 } from 'lucide-react';
 import { ChevronRight, ExternalLink } from 'lucide-react';
+import { Dialog, CloseButton, ConfirmDialog, type ConfirmState } from './components/Dialog';
+import { EXPENSE_CATEGORIES, POST_PLATFORMS, POST_STATUSES, activeOnly, archivedOnly, customerHasHistory, expenseCategoryLabel, greetingName, isArchived, normalizeCategory, plural, productHasHistory, selectableCustomerNames, setArchived, setCustomerArchived } from './lib/records';
+import { DEFAULT_PRICING, calculatePricing, scalePricingInputs, PRICING_LABELS, type PricingField, type PricingInputs } from './lib/pricing';
+import { validateCustomerForm, validateExpenseForm, validateNoteForm, validateOrderForm, validatePostForm, validateProductForm, type FieldErrors } from './lib/validation';
 
 type Product = {
   id: string;
@@ -64,6 +69,7 @@ type Product = {
   cost: number;
   stock: number;
   min: number;
+  archived?: boolean;
 };
 type OrderItem = { productId:string; name:string; sku:string; qty:number; unitPrice:number; unitCost:number };
 type RefundEntry = { id: string; amount: number; date: string; method: string; reference: string; note: string };
@@ -88,9 +94,9 @@ type Order = {
   date: string;
   scheduledDate?: string;
 };
-type Customer = { id: string; name: string; email: string; phone: string; company: string; address: string; city: string; country: string; notes: string };
+type Customer = { id: string; name: string; email: string; phone: string; company: string; address: string; city: string; country: string; notes: string; archived?: boolean };
 type Note = { id: string; title: string; body: string; date: string; important?: boolean };
-type Expense = { id: string; name: string; amount: number; date: string };
+type Expense = { id: string; name: string; amount: number; date: string; category?: string };
 type Post = {
   id: string;
   platform: string;
@@ -214,23 +220,32 @@ type FormFieldProps = {
   options?: { value: string; label: string }[];
   form: Record<string, string>;
   change: (key: string, value: string) => void;
+  required?: boolean;
+  error?: string;
+  hint?: string;
+  idPrefix?: string;
 };
-function Field({ name, label, type = 'text', options = [], form, change }: FormFieldProps) {
+function Field({ name, label, type = 'text', options = [], form, change, required = false, error, hint, idPrefix = 'record' }: FormFieldProps) {
+  const id = idPrefix + '-' + name;
+  const describedBy = [error ? id + '-error' : '', hint ? id + '-hint' : ''].filter(Boolean).join(' ') || undefined;
+  const common = { id, 'aria-invalid': error ? true : undefined, 'aria-required': required || undefined, 'aria-describedby': describedBy } as const;
   return (
-    <label className="field">
-      <span>{label}</span>
+    <div className={'field' + (error ? ' has-error' : '')}>
+      <label htmlFor={id}><span>{label}{required && <span className="required-mark" aria-hidden="true"> *</span>}{required && <span className="sr-only"> (required)</span>}</span></label>
       {options.length > 0 ? (
-        <select value={form[name] || ''} onChange={e => change(name, e.target.value)}>
+        <select {...common} value={form[name] || ''} onChange={e => change(name, e.target.value)}>
           <option value="">Choose...</option>
           {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
       ) : (
         <input
+          {...common}
           type={type}
           name={name}
           min={type==='number'?0:type==='date'?'1900-01-01':undefined}
           max={type==='number'?(name==='discount'?100:1000000000):type==='date'?'2100-12-31':undefined}
           step={type==='number'?(name==='stock'||name==='min'?'1':name==='discount'?'0.0001':'0.01'):undefined}
+          inputMode={type==='number'?(name==='stock'||name==='min'?'numeric':'decimal'):undefined}
           maxLength={type==='text'?(name==='caption'?2000:name==='address'?250:120):type==='email'?254:undefined}
           value={form[name] || ''}
           onChange={e => change(name, e.target.value)}
@@ -244,7 +259,9 @@ function Field({ name, label, type = 'text', options = [], form, change }: FormF
           } : undefined}
         />
       )}
-    </label>
+      {hint && <small id={id + '-hint'} className="field-hint">{hint}</small>}
+      {error && <small id={id + '-error'} className="field-error" role="alert">{error}</small>}
+    </div>
   );
 }
 const pageFromHash = () => {
@@ -375,8 +392,15 @@ function App() {
     } catch(err) {setAdminLicenseError(err instanceof Error ? err.message : 'Could not issue license.');}
     finally {setAdminLicenseBusy(false);}
   };
-  const manageAdminLicense = async (licenseId:string,action:'revoke'|'reset') => {
-    if (!window.confirm(action==='revoke'?'Revoke this license? The buyer will lose access.':'Reset active installation for this buyer?')) return;
+  const manageAdminLicense = (licenseId:string,action:'revoke'|'reset') => {
+    setConfirm({
+      title: action==='revoke' ? 'Revoke this license?' : 'Reset this installation?',
+      message: action==='revoke' ? 'The buyer will lose access to the app until a new license is issued.' : 'The buyer\'s active installation is released so they can activate on another device.',
+      confirmLabel: action==='revoke' ? 'Revoke license' : 'Reset installation', danger: action==='revoke',
+      onConfirm: () => { void performAdminLicenseAction(licenseId, action); },
+    });
+  };
+  const performAdminLicenseAction = async (licenseId:string,action:'revoke'|'reset') => {
     setAdminLicenseBusy(true);setAdminLicenseError('');
     try {
       await api.post('/api/admin/licenses/'+licenseId+'/'+action,{});
@@ -452,9 +476,15 @@ function App() {
     return ()=>document.removeEventListener('pointerdown',close);
   },[]);
   const [ordersQuery, setOrdersQuery] = useState('');
-  const [hiddenMetrics, setHiddenMetrics] = useState<Record<string,boolean>>({});
+  const [hiddenMetrics, setHiddenMetrics] = useState<Record<string,boolean>>(() => {
+    try { const raw = JSON.parse(localStorage.getItem('sbcc_hidden_metrics') || '{}'); return raw && typeof raw === 'object' ? raw : {}; } catch { return {}; }
+  });
   const [invoiceOrder,setInvoiceOrder]=useState<Order|null>(null);  const [invoiceDownloading,setInvoiceDownloading]=useState(false);
-  const toggleMetric = (title:string) => setHiddenMetrics(state=>({...state,[title]:state[title]===false}));
+  const toggleMetric = (title:string) => setHiddenMetrics(state=>{
+    const next = { ...state, [title]: !state[title] };
+    try { localStorage.setItem('sbcc_hidden_metrics', JSON.stringify(next)); } catch { /* storage unavailable: keep in memory */ }
+    return next;
+  });
   const currencyCode = ['USD','GBP','EUR','PKR','CAD','AUD'].includes(profile.currency) ? profile.currency : 'USD';
   const money = (amount: number) => new Intl.NumberFormat('en-US', {
     style: 'currency', currency: currencyCode, minimumFractionDigits: 2, maximumFractionDigits: 2
@@ -531,7 +561,7 @@ function App() {
       const response=await api.post('/api/logo',{imageData,contentType:'image/jpeg'});
       if(!response.data.url)throw new Error('Could not save logo.');
       setLogoUrl(response.data.url);
-    } catch(err) { window.alert(err instanceof Error?err.message:'Logo upload failed.'); }
+    } catch(err) { setActionNotice(err instanceof Error?err.message:'Logo upload failed.'); }
     finally {setLogoBusy(false);}
   };
   const prepareProductPhoto=async (event:React.ChangeEvent<HTMLInputElement>)=>{
@@ -686,12 +716,19 @@ function App() {
   };
   const [form, setForm] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
-  const [fee, setFee] = useState(6.5);
-  const [fixed, setFixed] = useState(0.3);
-  const [desired, setDesired] = useState(10);
-  const [pack, setPack] = useState(2);
-  const [ship, setShip] = useState(3);
-  const [calcId, setCalcId] = useState('p1');
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [confirm, setConfirm] = useState<ConfirmState>(null);
+  const [liveMessage, setLiveMessage] = useState('');
+  const baselineRef = useRef('');
+  const submittingRef = useRef(false);
+  const announce = (message: string) => { setLiveMessage(''); window.setTimeout(() => setLiveMessage(message), 60); };
+  const [pricing, setPricing] = useState<PricingInputs>(DEFAULT_PRICING);
+  const [calcId, setCalcId] = useState('');
+  const [showArchivedProducts, setShowArchivedProducts] = useState(false);
+  const [showArchivedCustomers, setShowArchivedCustomers] = useState(false);
+  const [customerQuery, setCustomerQuery] = useState('');
+  const [undoAction, setUndoAction] = useState<{ message: string; restore: (current: Store) => Store } | null>(null);
+  const [recordBusy, setRecordBusy] = useState(false);
   const save = async (next: Store) => {
     if (!user) throw new Error('Please sign in.');
     setSaving(true);
@@ -701,6 +738,23 @@ function App() {
     } finally { setSaving(false); }
   };
 
+  /** Resolves the saved business logo to an embeddable data URL (+ natural size); null when unavailable. */
+  const loadInvoiceLogo = async (url: string | null | undefined): Promise<{ dataUrl: string; format: 'PNG' | 'JPEG' | 'WEBP'; width: number; height: number } | null> => {
+    if (!url) return null;
+    try {
+      let dataUrl = url;
+      if (!url.startsWith('data:image/')) {
+        const response = await fetch(url, { credentials: 'same-origin' });
+        if (!response.ok) return null;
+        const blob = await response.blob();
+        if (!blob.type.startsWith('image/')) return null;
+        dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blob); });
+      }
+      const format = dataUrl.startsWith('data:image/png') ? 'PNG' : dataUrl.startsWith('data:image/webp') ? 'WEBP' : 'JPEG';
+      const size = await new Promise<{ width: number; height: number }>((resolve, reject) => { const img = new Image(); img.onload = () => resolve({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 }); img.onerror = () => reject(new Error('logo')); img.src = dataUrl; });
+      return { dataUrl, format, ...size };
+    } catch { return null; }
+  };
   const downloadInvoice = async (selectedOrder?: Order) => {
     const order = selectedOrder || invoiceOrder;
     if (!order || invoiceDownloading) return;
@@ -709,7 +763,7 @@ function App() {
       const { jsPDF } = await import('jspdf');      const pdf = new jsPDF({orientation:'portrait',unit:'mm',format:'a4',compress:true});
       const items = orderItems(order);
       const customer = (data.customers || []).find(c=>c.name.toLowerCase()===order.customer.toLowerCase());
-      const navy: [number,number,number] = [17,47,99];
+      const navy: [number,number,number] = [15,98,84]; // brand teal (replaces the old navy/blue)
       const dark: [number,number,number] = [28,36,50];
       const muted: [number,number,number] = [90,102,117];
       const moneyText=(n:number)=>currencyCode+' '+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -738,14 +792,19 @@ function App() {
       pdf.setFont('helvetica','normal');pdf.setFontSize(8.5);ink(muted);
       pdf.text('Invoice Number: '+order.id,17,65);
       pdf.text('Date: '+order.date,17,70);
-      const businessName=profile.businessName||'My Business';
-      pdf.setFont('helvetica','bold');pdf.setFontSize(14);ink(dark);
-      pdf.text(pdf.splitTextToSize(businessName,76).slice(0,3),192,53,{align:'right'});
-      if(logoUrl?.startsWith('data:image/')){
-        try {pdf.addImage(logoUrl,'JPEG',173,57,19,19,undefined,'FAST');}
-        catch{ /* Continue when logo cannot be embedded. */ }
-      } else {
-        fill([247,191,53]);pdf.rect(178,62,12,13,'F');
+      // Business identity comes only from the saved profile. Nothing is invented: no placeholder name, no LOGO box.
+      const businessName=profile.businessName.trim();
+      const brand=await loadInvoiceLogo(logoUrl);
+      if(businessName){
+        pdf.setFont('helvetica','bold');pdf.setFontSize(14);ink(dark);
+        pdf.text(pdf.splitTextToSize(businessName,76).slice(0,3),192,53,{align:'right'});
+      }
+      if(brand){
+        try {
+          const box=19, scale=Math.min(box/brand.width,box/brand.height);
+          const w=brand.width*scale, h=brand.height*scale;
+          pdf.addImage(brand.dataUrl,brand.format,192-w,57+(box-h)/2,w,h,undefined,'FAST');
+        } catch { /* Logo could not be embedded: the business name above is the fallback. */ }
       }
       const subsection=(label:string,x:number,y:number)=>{
         pdf.setFont('helvetica','bold');pdf.setFontSize(9);ink(dark);pdf.text(label,x,y);
@@ -819,7 +878,7 @@ function App() {
       pdf.text(pdf.splitTextToSize('Thank you for your business. Remaining payments are due under the agreed terms.',95).slice(0,2),17,Math.min(264,totalsY+13));
       pdf.save('Invoice-'+order.id.replace(/[^A-Za-z0-9_-]/g,'')+'.pdf');
     } catch(err) {
-      window.alert('PDF download failed: '+(err instanceof Error?err.message:'Please try Print instead.'));
+      setActionNotice('PDF download failed: '+(err instanceof Error?err.message:'Please try Print instead.'));
     } finally {
       setInvoiceDownloading(false);
     }
@@ -849,10 +908,7 @@ function App() {
       const result = response.data;
       setProfile(result.profile);
       setData(result.workspace);
-      setPack(v => Math.round(v * result.rate * 100) / 100);
-      setShip(v => Math.round(v * result.rate * 100) / 100);
-      setFixed(v => Math.round(v * result.rate * 100) / 100);
-      setDesired(v => Math.round(v * result.rate * 100) / 100);
+      setPricing(current => scalePricingInputs(current, Number(result.rate)));
       setLastConversion('Last conversion: 1 ' + result.from + ' = ' + Number(result.rate).toFixed(6) + ' ' + result.to + ' (' + result.date + ')');
       setCurrencyModal(false);
       setFxQuote(null);
@@ -931,6 +987,14 @@ function App() {
     setEditingId(c.id.startsWith('auto-') ? null : c.id);
     setForm({name:c.name,email:c.email,phone:c.phone,company:c.company,address:c.address,city:c.city,country:c.country,notes:c.notes});
     setError('');
+  };
+  const editExpense = (x: Expense) => {
+    setEditingId(x.id); setModal('Expense'); setError('');
+    setForm({ name: x.name, amount: String(x.amount), date: x.date, category: normalizeCategory(x.category) });
+  };
+  const editPost = (x: Post) => {
+    setEditingId(x.id); setModal('Post'); setError('');
+    setForm({ platform: x.platform, caption: x.caption, date: x.date, status: x.status });
   };
   const editNote = (note: Note) => {
     setEditingId(note.id);
@@ -1069,13 +1133,27 @@ function App() {
   const recentOrders = data.orders
     .filter(o => !['Completed','Fulfilled','Cancelled'].includes(o.status))
     .slice(0, 5);
-  const productMatches = data.products.filter(p =>
+  const productMatches = activeOnly(data.products).filter(p =>
     (p.name + ' ' + p.sku).toLowerCase().includes(productQuery.trim().toLowerCase())
   ).slice(0, 12);
-  const customerMatches = [...new Set([...customers.map(c=>c.name), ...data.orders.map(o => o.customer)])]
+  const customerMatches = selectableCustomerNames(data.customers || [], data.orders)
     .filter(name => form.customer?.trim() &&
       name.toLowerCase().includes(form.customer.trim().toLowerCase()) &&      name.toLowerCase() !== form.customer.trim().toLowerCase()).slice(0, 6);
-  const change = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+  const change = (k: string, v: string) => {
+    setForm(f => ({ ...f, [k]: v }));
+    setErrors(prev => { if (!prev[k]) return prev; const { [k]: _gone, ...rest } = prev; return rest; });
+  };
+  const formSnapshot = () => JSON.stringify([form, draftItems.map(i => [i.productId, i.qty]), productPhotoDraft ? 'photo' : '', productPhotoRemove]);
+  useEffect(() => { baselineRef.current = modal ? formSnapshot() : ''; setErrors({}); }, [modal, editingId]);
+  const formDirty = !!modal && baselineRef.current !== '' && baselineRef.current !== formSnapshot();
+  const closeModal = () => {
+    if (saving || productPhotoBusy) return;
+    if (formDirty) {
+      setConfirm({ title: 'Discard unsaved changes?', message: 'You have changes in this form that have not been saved. If you close it now they will be lost.', confirmLabel: 'Discard changes', cancelLabel: 'Keep editing', danger: true, onConfirm: () => { setModal(''); setErrors({}); setError(''); } });
+      return;
+    }
+    setModal(''); setErrors({}); setError('');
+  };
   const orderDraftProduct = product(form.productId || '');
   const draftQuantity = Math.max(0, Number(form.qty) || 0);
   const draftSubtotal = Math.round(draftItems.reduce((sum,line)=>sum+line.unitPrice*line.qty,0)*100)/100;
@@ -1089,8 +1167,39 @@ function App() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if(saving||productPhotoBusy)return;
+    if(saving||productPhotoBusy||submittingRef.current)return;
     const f = form;
+    const storedCustomers = data.customers || [];
+    const previousOrder = modal==='Order' && editingId ? data.orders.find(o=>o.id===editingId) : undefined;
+    const fieldErrors: FieldErrors =
+      modal==='Product' ? validateProductForm(f, {
+        skuTaken: !!f.sku?.trim() && data.products.some(p => p.id !== editingId && p.sku.trim().toLowerCase() === f.sku.trim().toLowerCase()),
+        allocated: editingId ? sold(editingId) : undefined }) :
+      modal==='Customer' ? validateCustomerForm(f, { nameTaken: !!f.name?.trim() && storedCustomers.some(c => c.id !== editingId && c.name.trim().toLowerCase() === f.name.trim().toLowerCase()) }) :
+      modal==='Order' ? validateOrderForm(f, { lineCount: draftItems.length,
+        customerArchived: !!f.customer?.trim() && (!previousOrder || previousOrder.customer.trim().toLowerCase() !== f.customer.trim().toLowerCase()) &&
+          storedCustomers.some(c => isArchived(c) && c.name.trim().toLowerCase() === f.customer.trim().toLowerCase()) }) :
+      modal==='Expense' ? validateExpenseForm(f) :
+      modal==='Post' ? validatePostForm({ ...f, status: f.status || 'Planned' }) :
+      modal==='Note' ? validateNoteForm(f) : {};
+    if (modal==='Order') {
+      const prevIds = previousOrder ? orderItems(previousOrder).map(l => l.productId) : [];
+      const bad = draftItems.find(l => isArchived(data.products.find(p => p.id === l.productId)) && !prevIds.includes(l.productId));
+      if (bad) fieldErrors.products = bad.name + ' is archived and cannot be added to a new order line. Remove it or restore the product.';
+    }
+    if (Object.keys(fieldErrors).length) {
+      setErrors(fieldErrors);
+      const count = Object.keys(fieldErrors).length;
+      setError('Please fix ' + plural(count, 'field') + ' highlighted below. Nothing was saved.');
+      const first = Object.keys(fieldErrors)[0];
+      window.setTimeout(() => (document.getElementById(first === 'products' ? 'product-search' : 'record-' + first) as HTMLElement | null)?.focus(), 30);
+      return;
+    }
+    setErrors({});
+    submittingRef.current = true;
+    try { await submitValidated(f); } finally { submittingRef.current = false; }
+  };
+  const submitValidated = async (f: Record<string, string>) => {
     const num = (k: string) => Number(f[k]);
     const fail=(message:string)=>setError(message);
     for(const key of ['date','scheduledDate']){
@@ -1139,7 +1248,8 @@ function App() {
       const updated:Product = {
         id: editingId || 'p'+crypto.randomUUID(),
         name:f.name.trim(),sku:f.sku.trim(),
-        price:num('price'),cost:num('cost'),stock:num('stock'),min:num('min')
+        price:num('price'),cost:num('cost'),stock:num('stock'),min:num('min'),
+        ...(data.products.find(p=>p.id===editingId)?.archived?{archived:true}:{})
       };
       const existing=data.products.find(p=>p.id===updated.id);
       next.products=existing
@@ -1161,9 +1271,11 @@ function App() {
         setProductPhotoDraft(null);
         setProductPhotoRemove(false);
         setModal('');
+        announce('Product saved.');
       } catch(err) {
         setEditingId(updated.id);
-        setError(err instanceof Error?err.message:'Could not save product.');
+        const msg = err instanceof Error?err.message:'Could not save product.';
+        setError(msg); announce('Not saved. ' + msg);
       }
       return;
     } else if(modal==='Order') {
@@ -1226,7 +1338,7 @@ function App() {
       next.orders=editingId?data.orders.map(o=>o.id===editingId?order:o):[order,...data.orders];
     } else if(modal==='Customer') {
       if(!f.name?.trim()){setError('Customer name is required.');return;}
-      const customer:Customer={id:editingId||'c'+crypto.randomUUID(),name:f.name.trim(),email:(f.email||'').trim(),phone:(f.phone||'').trim(),company:(f.company||'').trim(),address:(f.address||'').trim(),city:(f.city||'').trim(),country:(f.country||'').trim(),notes:(f.notes||'').trim()};
+      const customer:Customer={id:editingId||'c'+crypto.randomUUID(),name:f.name.trim(),email:(f.email||'').trim(),phone:(f.phone||'').trim(),company:(f.company||'').trim(),address:(f.address||'').trim(),city:(f.city||'').trim(),country:(f.country||'').trim(),notes:(f.notes||'').trim(),...((data.customers||[]).find(c=>c.id===editingId)?.archived?{archived:true}:{})};
       if(data.customers?.some(c=>c.id!==editingId&&c.name.toLowerCase()===customer.name.toLowerCase())){setError('A customer with that name already exists.');return;}
       next.customers=editingId?(data.customers||[]).map(c=>c.id===editingId?customer:c):[...(data.customers||[]),customer];
     } else if(modal==='Note') {
@@ -1238,29 +1350,98 @@ function App() {
         setError('Enter an expense name and positive amount.');
         return;
       }
-      next.expenses = [
-        {
-          id: 'e' + Date.now(),
-          name: f.name.trim(),          amount: num('amount'),
-          date: f.date || new Date().toISOString().slice(0, 10),
-        },
-        ...data.expenses,
-      ];
+      const previousExpense = editingId ? data.expenses.find(x => x.id === editingId) : undefined;
+      if (editingId && !previousExpense) { setError('This expense no longer exists. Close the form and reload.'); return; }
+      const { category: _oldCategory, ...expenseBase } = previousExpense || ({} as Expense);
+      const category = normalizeCategory(f.category);
+      const expense: Expense = {
+        ...expenseBase,
+        id: editingId || 'e' + crypto.randomUUID().replace(/-/g, '').slice(0, 16),
+        name: f.name.trim(),
+        amount: Math.round(num('amount') * 100) / 100,
+        date: f.date || new Date().toISOString().slice(0, 10),
+        ...(category ? { category } : {}),
+      };
+      next.expenses = editingId ? data.expenses.map(x => x.id === editingId ? expense : x) : [expense, ...data.expenses];
     } else if (modal === 'Post') {
       if (!f.platform || !f.caption?.trim() || !f.date) {
         setError('Complete platform, caption and date.');
         return;
       }
-      next.posts = [
-        {
-          id: 's' + Date.now(),          platform: f.platform,
-          caption: f.caption.trim(),          date: f.date,          status: f.status || 'Planned',
-        },
-        ...data.posts,
-      ];
+      if (editingId && !data.posts.some(x => x.id === editingId)) { setError('This post no longer exists. Close the form and reload.'); return; }
+      const post: Post = {
+        id: editingId || 's' + crypto.randomUUID().replace(/-/g, '').slice(0, 16),
+        platform: f.platform, caption: f.caption.trim(), date: f.date, status: f.status || 'Planned',
+      };
+      next.posts = editingId ? data.posts.map(x => x.id === editingId ? post : x) : [post, ...data.posts];
     }
-    try { await save(next); setModal(''); } catch (err) { setError(err instanceof Error ? err.message : 'Save failed.'); }
+    try {
+      await save(next); setModal(''); setErrors({}); setError('');
+      announce(modal + (editingId ? ' changes saved.' : ' saved.'));
+    } catch (err) { const msg = err instanceof Error ? err.message : 'Save failed.'; setError(msg); announce('Not saved. ' + msg); }
   };
+  // ---- F9: server-persisted record management (every change goes through save() -> PUT /api/workspace) ----
+  const runRecordAction = async (next: Store, successMessage: string, undo?: (current: Store) => Store) => {
+    if (recordBusy || saving) return;
+    setRecordBusy(true);
+    try {
+      await save(next);
+      announce(successMessage);
+      if (undo) setUndoAction({ message: successMessage, restore: undo });
+    } catch (err) {
+      announce('Not saved. ' + (err instanceof Error ? err.message : 'Please try again.'));
+      setUndoAction(null);
+      setActionNotice(err instanceof Error ? err.message : 'The change could not be saved.');
+    } finally { setRecordBusy(false); }
+  };
+  const archiveProduct = (p: Product, archived: boolean) => {
+    const apply = () => void runRecordAction({ ...data, products: setArchived(data.products, p.id, archived) },
+      archived ? p.name + ' archived.' : p.name + ' restored.', current => ({ ...current, products: setArchived(current.products, p.id, !archived) }));
+    if (!archived) { apply(); return; }
+    setConfirm({ title: 'Archive “' + p.name + '”?', message: 'It will no longer be offered when creating new orders or in pricing. Existing orders, invoices and sales history keep showing it, its SKU stays reserved, and you can restore it any time from “Archived”.', confirmLabel: 'Archive product', onConfirm: apply });
+  };
+  const archiveCustomer = (c: Customer, archived: boolean) => {
+    const clean: Customer = { id: c.id, name: c.name, email: c.email, phone: c.phone, company: c.company, address: c.address, city: c.city, country: c.country, notes: c.notes };
+    const apply = () => {
+      const nextCustomers = setCustomerArchived(data.customers || [], clean, archived);
+      void runRecordAction({ ...data, customers: nextCustomers }, archived ? c.name + ' archived.' : c.name + ' restored.',
+        current => ({ ...current, customers: setCustomerArchived(current.customers || [], clean, !archived) }));
+    };
+    if (!archived) { apply(); return; }
+    setConfirm({ title: 'Archive “' + c.name + '”?', message: 'They will no longer appear when creating new orders. Their past orders, invoices and payments are kept unchanged, and you can restore them any time from “Archived”.', confirmLabel: 'Archive customer', onConfirm: apply });
+  };
+  const deleteExpense = (x: Expense) => {
+    const index = data.expenses.findIndex(e => e.id === x.id);
+    setConfirm({ title: 'Delete this expense?', message: '“' + x.name + '” (' + money(x.amount) + ', ' + x.date + ') will be removed from your expenses and profit calculations. You can undo this straight after deleting.', confirmLabel: 'Delete expense', danger: true,
+      onConfirm: () => void runRecordAction({ ...data, expenses: data.expenses.filter(e => e.id !== x.id) }, 'Expense deleted.',
+        current => current.expenses.some(e => e.id === x.id) ? current : { ...current, expenses: [...current.expenses.slice(0, index), x, ...current.expenses.slice(index)] }) });
+  };
+  const deletePost = (x: Post) => {
+    const index = data.posts.findIndex(e => e.id === x.id);
+    setConfirm({ title: 'Delete this planned post?', message: '“' + x.caption.slice(0, 80) + '” on ' + x.date + ' will be removed. You can undo this straight after deleting.', confirmLabel: 'Delete post', danger: true,
+      onConfirm: () => void runRecordAction({ ...data, posts: data.posts.filter(e => e.id !== x.id) }, 'Post deleted.',
+        current => current.posts.some(e => e.id === x.id) ? current : { ...current, posts: [...current.posts.slice(0, index), x, ...current.posts.slice(index)] }) });
+  };
+  const deleteNote = (x: Note) => {
+    const list = data.notes || [];
+    const index = list.findIndex(e => e.id === x.id);
+    setConfirm({ title: 'Delete this note?', message: '“' + x.title + '” will be removed. You can undo this straight after deleting.', confirmLabel: 'Delete note', danger: true,
+      onConfirm: () => void runRecordAction({ ...data, notes: list.filter(e => e.id !== x.id) }, 'Note deleted.',
+        current => (current.notes || []).some(e => e.id === x.id) ? current : { ...current, notes: [...(current.notes || []).slice(0, index), x, ...(current.notes || []).slice(index)] }) });
+  };
+  const runUndo = async () => {
+    if (!undoAction || recordBusy) return;
+    const { restore } = undoAction;
+    setUndoAction(null);
+    await runRecordAction(restore(data), 'Restored.');
+  };
+  useEffect(() => { if (!undoAction) return; const timer = window.setTimeout(() => setUndoAction(null), 15000); return () => window.clearTimeout(timer); }, [undoAction]);
+  const [actionNotice, setActionNotice] = useState('');
+  useEffect(() => {
+    const business = profile.businessName.trim();
+    document.title = page + ' · ' + (business ? business + ' · ' : '') + 'Command Center';
+    announce(page + ' page');
+  }, [page]);
   const goto = (p: string) => {
     if (p !== page) {
       setInAppNavigation(true);
@@ -1293,9 +1474,9 @@ function App() {
     return [
       ...data.orders.filter(o=>[o.id,o.customer,...orderItems(o).map(i=>i.name)]
         .some(v=>v.toLowerCase().includes(query))).map(o=>({id:'order-'+o.id,kind:'Order',title:o.customer,detail:o.id+' · '+o.status,page:'Orders'})),
-      ...data.products.filter(p=>(p.name+' '+p.sku).toLowerCase().includes(query))
+      ...activeOnly(data.products).filter(p=>(p.name+' '+p.sku).toLowerCase().includes(query))
         .map(p=>({id:'product-'+p.id,kind:'Product',title:p.name,detail:p.sku,page:'Products'})),
-      ...customers.filter(c=>(c.name+' '+c.email+' '+c.phone).toLowerCase().includes(query))
+      ...activeOnly(customers).filter(c=>(c.name+' '+c.email+' '+c.phone).toLowerCase().includes(query))
         .map(c=>({id:'customer-'+c.id,kind:'Customer',title:c.name,detail:c.email||c.phone,page:'Customers'})),
       ...(data.notes||[]).filter(n=>(n.title+' '+n.body).toLowerCase().includes(query))
         .map(n=>({id:'note-'+n.id,kind:'Note',title:n.title,detail:n.date,page:'Content Planner'})),
@@ -1313,10 +1494,9 @@ function App() {
     if (inAppNavigation) window.history.back();
     else goto('Dashboard');
   };
-  const pricingP = product(calcId);
-  const subtotal = (pricingP?.cost || 0) + pack + ship + desired + fixed;
-  const recommended =
-    fee >= 100 ? NaN : Math.ceil((subtotal / (1 - fee / 100)) * 100) / 100;
+  const activeProducts = activeOnly(data.products);
+  const pricingP = activeProducts.find(p => p.id === calcId) || activeProducts[0];
+  const pricingResult = calculatePricing(pricing, pricingP ? pricingP.cost : null, pricingP ? pricingP.price : null);
   const stat = (
     title: string,
     value: string,
@@ -1328,16 +1508,16 @@ function App() {
         <span>{title}</span>
         <span className="stat-controls">
           <button type="button" className="stat-eye-button"
-            title={hiddenMetrics[title] === false ? 'Hide '+title : 'Show '+title}
-            aria-label={hiddenMetrics[title] === false ? 'Hide '+title : 'Show '+title}
-            aria-pressed={hiddenMetrics[title] === false}
+            title={hiddenMetrics[title] ? 'Show '+title : 'Hide '+title}
+            aria-label={hiddenMetrics[title] ? 'Show '+title : 'Hide '+title}
+            aria-pressed={!!hiddenMetrics[title]}
             onClick={()=>toggleMetric(title)}>
-            {hiddenMetrics[title] === false ? <EyeOff size={18}/> : <Eye size={18}/>}
+            {hiddenMetrics[title] ? <Eye size={18} aria-hidden="true"/> : <EyeOff size={18} aria-hidden="true"/>}
           </button>
         </span>
       </div>
-      <div className={'stat-value'+(hiddenMetrics[title] !== false ? ' stat-masked':'')}>
-        {hiddenMetrics[title] === false ? value : <span className="stat-hidden-line" aria-label="Amount hidden"/>}
+      <div className={'stat-value'+(hiddenMetrics[title] ? ' stat-masked':'')}>
+        {hiddenMetrics[title] ? <span className="stat-hidden-line" role="img" aria-label="Amount hidden"/> : value}
       </div>
       <div className="stat-foot">{foot}</div>
     </div>
@@ -1378,34 +1558,41 @@ function App() {
   );
   return (
     <div className={"shell theme-" + theme + (sidebarCollapsed ? " sidebar-is-collapsed" : "")}>
-      <aside id="workspace-navigation" className={'sidebar ' + (mobile ? 'show' : '')}>
+      <a className="skip-link" href="#main-content" onClick={event => { event.preventDefault(); const target = document.getElementById('main-content'); target?.focus(); target?.scrollIntoView?.(); }}>Skip to main content</a>
+      <aside id="workspace-navigation" data-app-background="" className={'sidebar ' + (mobile ? 'show' : '')} aria-label="Sidebar">
         <div className="brand">
           <div className="brand-mark">C</div>
           <div>            <strong>Command Center</strong>
             <small>BUSINESS, SIMPLIFIED</small>          </div>
         </div>
-        <div className="navlabel">WORKSPACE</div>
+        <div className="navlabel" id="workspace-nav-label">WORKSPACE</div>
+        <nav aria-labelledby="workspace-nav-label" className="primary-nav">
         {nav.map(([name, Icon]) => (
           <button
             key={name}
+            type="button"
             className={'nav ' + (page === name ? 'active' : '')}
+            aria-current={page === name ? 'page' : undefined}
             onClick={() => goto(name)}
           >
-            <Icon size={18} />
+            <Icon size={18} aria-hidden="true" />
             {name}
           </button>
         ))}
+        </nav>
         <div className="sidebottom">
                     <div className="demo-pill"><span className="pulse" /> Account workspace</div>
           <small className="workspace-disclaimer">Financial estimates only.</small>
           <button className="textbtn" onClick={() => goto('Profile')}>Manage profile</button>
           <button
+            type="button"
             className="textbtn"
-            onClick={() => {
-              if (window.confirm('Clear all records to start empty?')) {
-                void save(blank).then(() => goto('Dashboard')).catch(err => window.alert('Could not clear records: ' + String(err)));
-              }
-            }}
+            onClick={() => setConfirm({
+              title: 'Clear all records?',
+              message: 'This removes every product, order, customer, expense, post and note from this workspace so you can start empty. It cannot be undone — export or keep a copy of anything you need first.',
+              confirmLabel: 'Clear all records', cancelLabel: 'Keep my records', danger: true,
+              onConfirm: () => { void save(blank).then(() => { goto('Dashboard'); announce('All records cleared.'); }).catch(err => announce('Could not clear records: ' + (err instanceof Error ? err.message : String(err)))); },
+            })}
           >
             Clear all records
           </button>
@@ -1418,7 +1605,7 @@ function App() {
           aria-label="Close menu"
         />
       )}
-      <main>
+      <main id="main-content" tabIndex={-1} data-app-background="">
         <div className="workspace-header">
           <header className="workspace-toolbar">
           <button
@@ -1450,7 +1637,7 @@ function App() {
           <div className="header-title">
             <div className="eyebrow">YOUR WORKSPACE / {page.toUpperCase()}</div>
             <h1>
-              {page === 'Dashboard' ? 'Welcome back, ' + (profile.displayName?.trim() || user.name || 'there') + ' 👋' : page}
+              {page === 'Dashboard' ? 'Welcome back, ' + greetingName(profile.displayName, user.name, user.email) + ' 👋' : page}
             </h1>
           </div>
           <div className="global-search" ref={globalSearchRef}>
@@ -1530,7 +1717,7 @@ function App() {
                   onClick={async () => {
                     setHeaderMenu(null);
                     try { await auth.signOut(); setUser(null); setData(blank); window.location.hash = ''; }
-                    catch (err) { window.alert(err instanceof Error ? err.message : 'Could not sign out.'); }
+                    catch (err) { setActionNotice(err instanceof Error ? err.message : 'Could not sign out.'); }
                   }}><LogOut size={18}/> Log Out</button>
               </div>}
             </div>
@@ -1760,7 +1947,7 @@ function App() {
                     <span className="orange-tag">Action center</span>
                   </div>
 
-                  {data.products
+                  {activeProducts
                     .filter(p => available(p) <= p.min)
                     .map(p => (
                       <div className="alertrow" key={p.id}>
@@ -1788,7 +1975,7 @@ function App() {
                       </span>
                     </div>
                   )}
-                  {!data.products.some(p => available(p) <= p.min) &&
+                  {!activeProducts.some(p => available(p) <= p.min) &&
                     outstanding === 0 && refundPending === 0 && (
                       <p className="empty">All clear for now.</p>
                     )}
@@ -1848,8 +2035,8 @@ function App() {
           {page === 'Orders' && (
             <>
               <div className="sectionhead">
-                <div><h2>All orders</h2></div>
-                <button className="primary" onClick={() => open('Order')}><Plus size={17}/> Add order</button>
+                <div><h2>All orders</h2><p className="section-sub">{plural(shownOrders.length, 'order')} shown</p></div>
+                <button type="button" className="primary" onClick={() => open('Order')}><Plus size={17} aria-hidden="true"/> Add order</button>
               </div>
               <div className="order-tabs" role="tablist" aria-label="Order status filters">
                 {(['All', 'Processing', 'Completed', 'Cancelled'] as const).map(tab => (
@@ -1872,23 +2059,24 @@ function App() {
               {actionError && <div className="formerror" role="alert"><AlertCircle size={17}/>{actionError}</div>}
               <div className="panel tablewrap responsive-records orders-responsive-table">
                 <table>
-                  <thead><tr><th>Order</th><th>Customer</th><th>Item</th><th>Qty</th><th>Total</th><th>Received</th><th>Refunded</th><th>Payment / refund</th><th>Status</th><th>Actions</th></tr></thead>
+                  <caption className="sr-only">Orders, filtered by {orderTab.toLowerCase()}{ordersQuery.trim() ? ' and search “' + ordersQuery.trim() + '”' : ''}</caption>
+                  <thead><tr><th scope="col">Order</th><th scope="col">Customer</th><th scope="col">Item</th><th scope="col">Qty</th><th scope="col">Total</th><th scope="col">Received</th><th scope="col">Refunded</th><th scope="col">Payment / refund</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
                   <tbody>{shownOrders.map(o => <tr key={o.id}>
-                    <td><b>{o.id}</b><small>{o.date}</small></td>
-                    <td>{o.customer}</td><td>{orderItems(o).map(line=><div key={line.productId}>{line.name} × {line.qty}</div>)}</td><td>{orderItems(o).reduce((sum,line)=>sum+line.qty,0)}</td>
-                    <td>{money(orderTotal(o))}</td><td>{money(o.paid)}</td>
-                    <td>{money(refundedAmount(o))}</td>
-                    <td><span className={'refund-status ' + (refundDue(o) > 0 ? 'needs-refund' : '')}>{refundStatus(o)}</span>
+                    <td className="cell-id"><b>{o.id}</b><small>{o.date}</small></td>
+                    <td className="cell-customer">{o.customer}</td><td className="cell-items">{orderItems(o).map(line=><div key={line.productId}>{line.name} × {line.qty}</div>)}</td><td className="cell-qty">{orderItems(o).reduce((sum,line)=>sum+line.qty,0)}</td>
+                    <td className="cell-amount">{money(orderTotal(o))}</td><td className="cell-amount">{money(o.paid)}</td>
+                    <td className="cell-amount">{money(refundedAmount(o))}</td>
+                    <td className="cell-refund"><span className={'refund-status ' + (refundDue(o) > 0 ? 'needs-refund' : '')}>{refundStatus(o)}</span>
                       {refundDue(o) > 0 && <small>{money(refundDue(o))} due</small>}
                       {(o.refundHistory || []).length > 0 && <details className="refund-history">
-                        <summary>{o.refundHistory!.length} refund record(s)</summary>
+                        <summary>{plural(o.refundHistory!.length, 'refund record')}</summary>
                         {o.refundHistory!.map(r => <div key={r.id}><b>{money(r.amount)}</b> · {r.date} · {r.method}
                           {r.reference && <small>Ref: {r.reference}</small>}
                           {r.note && <small>{r.note}</small>}
                         </div>)}
                       </details>}
-                    </td><td><span className="status">{o.status}</span></td>
-                    <td><div className="action-buttons">
+                    </td><td className="cell-status"><span className="status">{o.status}</span></td>
+                    <td className="cell-actions"><div className="action-buttons">
   {(o.status === 'Completed' || o.status === 'Fulfilled') && (
     <button type="button" className="icon-action" title="Preview / print invoice"
       aria-label={'Preview and print invoice '+o.id}
@@ -1918,38 +2106,52 @@ function App() {
 </div></td>
                   </tr>)}</tbody>
                 </table>
-                {!shownOrders.length && <p className="empty">No {orderTab.toLowerCase()} orders to display.</p>}
+                {!shownOrders.length && <p className="empty" role="status">{ordersQuery.trim()
+                  ? 'No orders match “' + ordersQuery.trim() + '”' + (orderTab !== 'All' ? ' in ' + orderTab.toLowerCase() + ' orders' : '') + '. Try a different name, product or order number.'
+                  : data.orders.length === 0 ? 'No orders yet. Click Add order to record your first sale.'
+                  : 'No ' + orderTab.toLowerCase() + ' orders to display.'}</p>}
               </div>
             </>
           )}
-          {page === 'Products' && (
+          {page === 'Products' && (() => {
+            const archivedList = archivedOnly(data.products);
+            const q = catalogQuery.trim().toLowerCase();
+            const visible = (showArchivedProducts ? archivedList : activeProducts).filter(p => (p.name+' '+p.sku).toLowerCase().includes(q));
+            return (
             <>
               <div className="sectionhead">
                 <div>
                   <h2>Your catalog</h2>
-                  
+                  <p className="section-sub">{plural(activeProducts.length, 'active product')}{archivedList.length ? ' · ' + archivedList.length + ' archived' : ''}</p>
                 </div>
-                <button className="primary" onClick={() => open('Product')}>
-                  <Plus size={17} /> Add product
+                <button type="button" className="primary" onClick={() => open('Product')}>
+                  <Plus size={17} aria-hidden="true" /> Add product
                 </button>
               </div>
-              <div className="catalog-filter-wrap">
-                <Search size={18}/>
-                <input type="search" aria-label="Filter product catalog" placeholder="Filter products by name or SKU…"
-                  value={catalogQuery} onChange={event=>setCatalogQuery(event.target.value)}/>
-                {catalogQuery&&<button type="button" aria-label="Clear catalog search" onClick={()=>setCatalogQuery('')}><X size={16}/></button>}
+              <div className="record-toolbar">
+                <div className="catalog-filter-wrap">
+                  <Search size={18} aria-hidden="true"/>
+                  <input type="search" aria-label="Filter product catalog" placeholder="Filter products by name or SKU…"
+                    value={catalogQuery} onChange={event=>setCatalogQuery(event.target.value)}/>
+                  {catalogQuery&&<button type="button" aria-label="Clear catalog search" onClick={()=>setCatalogQuery('')}><X size={16} aria-hidden="true"/></button>}
+                </div>
+                <div className="segmented" role="group" aria-label="Product list view">
+                  <button type="button" aria-pressed={!showArchivedProducts} onClick={()=>setShowArchivedProducts(false)}>Active ({activeProducts.length})</button>
+                  <button type="button" aria-pressed={showArchivedProducts} onClick={()=>setShowArchivedProducts(true)}>Archived ({archivedList.length})</button>
+                </div>
               </div>
               <div className="catalog-grid">
-                {data.products.filter(p=>(p.name+' '+p.sku).toLowerCase().includes(catalogQuery.toLowerCase())).map(p=>(
-                  <article className="catalog-card" key={p.id}>
+                {visible.map(p=>(
+                  <article className={'catalog-card' + (isArchived(p) ? ' is-archived' : '')} key={p.id} aria-label={p.name + (isArchived(p) ? ' (archived)' : '')}>
                     <div className={'catalog-photo'+(productImages[p.id]?' has-photo':' no-photo')}>
                       {productImages[p.id] ? (
                         <img src={productImages[p.id]!} alt={p.name} loading="lazy"
                           onError={()=>setProductImages(images=>({...images,[p.id]:null}))}/>
-                      ) : <div className="catalog-photo-empty" aria-label="No product image added">
+                      ) : <div className="catalog-photo-empty" role="img" aria-label="No product image added">
                         <ImageIcon size={30} strokeWidth={1.35}/>
                       </div>}
                       <span className="catalog-sku">{p.sku}</span>
+                      {isArchived(p) && <span className="archived-badge">Archived</span>}
                     </div>
                     <div className="catalog-info">
                       <h3>{p.name}</h3>
@@ -1959,73 +2161,116 @@ function App() {
                         <div><span>Unit cost</span><strong>{money(p.cost)}</strong></div>
                       </div>
                       <div className="catalog-footer">
-                        <span className={available(p)<=p.min?'catalog-stock low':'catalog-stock'}>
-                          {available(p)<=p.min?'Low stock':'In stock'}                        </span>
-                        <button type="button" className="catalog-edit" onClick={()=>editProduct(p)}
-                          aria-label={'Edit product '+p.name} title={'Edit '+p.name}><Pencil size={18}/></button>
+                        {isArchived(p)
+                          ? <span className="catalog-stock">Not offered for new orders</span>
+                          : <span className={available(p)<=p.min?'catalog-stock low':'catalog-stock'}>{available(p)<=p.min?'Low stock':'In stock'}</span>}
+                        <div className="row-actions">
+                          <button type="button" className="catalog-edit" onClick={()=>editProduct(p)} disabled={recordBusy}
+                            aria-label={'Edit product '+p.name} title={'Edit '+p.name}><Pencil size={18} aria-hidden="true"/></button>
+                          <button type="button" className="catalog-edit" onClick={()=>archiveProduct(p, !isArchived(p))} disabled={recordBusy||saving}
+                            aria-label={(isArchived(p)?'Restore product ':'Archive product ')+p.name} title={isArchived(p)?'Restore':'Archive'}>
+                            {isArchived(p) ? <RotateCcw size={18} aria-hidden="true"/> : <Archive size={18} aria-hidden="true"/>}</button>
+                        </div>
                       </div>
                     </div>
                   </article>
                 ))}
               </div>
-              {!data.products.length && (
-                <p className="empty">
-                  Add your first product to start tracking stock.
+              {!visible.length && (
+                <p className="empty" role="status">
+                  {q ? 'No ' + (showArchivedProducts ? 'archived ' : '') + 'products match “' + catalogQuery.trim() + '”.'
+                    : showArchivedProducts ? 'No archived products. Archived products appear here and can be restored.'
+                    : 'Add your first product to start tracking stock.'}
                 </p>
               )}
             </>
-          )}
-          {page === 'Customers' && (
+            );
+          })()}
+          {page === 'Customers' && (() => {
+            const archivedList = archivedOnly(customers);
+            const activeList = activeOnly(customers);
+            const q = customerQuery.trim().toLowerCase();
+            const visible = (showArchivedCustomers ? archivedList : activeList)
+              .filter(c => !q || (c.name+' '+(c.company||'')+' '+c.email+' '+c.phone+' '+(c.city||'')+' '+(c.country||'')).toLowerCase().includes(q));
+            return (
             <>
               <div className="sectionhead">
-                <div><h2>Customers</h2></div>
-                <button className="primary" onClick={()=>open('Customer')}><Plus size={17}/> Add customer</button>              </div>
+                <div><h2>Customers</h2><p className="section-sub">{plural(activeList.length, 'active customer')}{archivedList.length ? ' · ' + archivedList.length + ' archived' : ''}</p></div>
+                <button type="button" className="primary" onClick={()=>open('Customer')}><Plus size={17} aria-hidden="true"/> Add customer</button>
+              </div>
+              <div className="record-toolbar">
+                <div className="catalog-filter-wrap">
+                  <Search size={18} aria-hidden="true"/>
+                  <input type="search" aria-label="Filter customers" placeholder="Filter customers by name, email or phone…"
+                    value={customerQuery} onChange={event=>setCustomerQuery(event.target.value)}/>
+                  {customerQuery&&<button type="button" aria-label="Clear customer search" onClick={()=>setCustomerQuery('')}><X size={16} aria-hidden="true"/></button>}
+                </div>
+                <div className="segmented" role="group" aria-label="Customer list view">
+                  <button type="button" aria-pressed={!showArchivedCustomers} onClick={()=>setShowArchivedCustomers(false)}>Active ({activeList.length})</button>
+                  <button type="button" aria-pressed={showArchivedCustomers} onClick={()=>setShowArchivedCustomers(true)}>Archived ({archivedList.length})</button>
+                </div>
+              </div>
               <div className="panel tablewrap responsive-records customers-responsive-table">
                 <table>
-                  <thead><tr><th>Name / Company</th><th>Email</th><th>Phone</th><th>Location</th><th>Orders</th><th>Net received</th><th>Actions</th></tr></thead>
-                  <tbody>{customers.map(c=><tr key={c.id}>
-                    <td><b>{c.name}</b>{c.company&&<small>{c.company}</small>}</td>
+                  <caption className="sr-only">{showArchivedCustomers ? 'Archived customers' : 'Active customers'}</caption>
+                  <thead><tr><th scope="col">Name / Company</th><th scope="col">Email</th><th scope="col">Phone</th><th scope="col">Location</th><th scope="col">Orders</th><th scope="col">Net received</th><th scope="col">Actions</th></tr></thead>
+                  <tbody>{visible.map(c=><tr key={c.id}>
+                    <td><b>{c.name}</b>{isArchived(c)&&<span className="archived-badge inline">Archived</span>}{c.company&&<small>{c.company}</small>}</td>
                     <td>{c.email||'—'}</td><td>{c.phone||'—'}</td>
                     <td>{[c.city,c.country].filter(Boolean).join(', ')||'—'}</td>
                     <td>{c.orders}</td><td>{money(c.spent)}</td>
-                    <td><button type="button" className="icon-action" aria-label={'Edit customer '+c.name} title="Edit customer"
-                      onClick={()=>editCustomer(c)}><Pencil size={17}/></button></td>
+                    <td><div className="action-buttons"><button type="button" className="icon-action" aria-label={'Edit customer '+c.name} title="Edit customer" disabled={recordBusy}
+                      onClick={()=>editCustomer(c)}><Pencil size={17} aria-hidden="true"/></button>
+                      <button type="button" className="icon-action" disabled={recordBusy||saving} aria-label={(isArchived(c)?'Restore customer ':'Archive customer ')+c.name}
+                        title={isArchived(c)?'Restore customer':'Archive customer'} onClick={()=>archiveCustomer(c, !isArchived(c))}>
+                        {isArchived(c)?<RotateCcw size={17} aria-hidden="true"/>:<Archive size={17} aria-hidden="true"/>}</button></div></td>
                   </tr>)}</tbody>
                 </table>
-                {!customers.length&&<p className="empty">No customers yet. Click Add customer.</p>}
+                {!visible.length&&<p className="empty" role="status">{q ? 'No ' + (showArchivedCustomers ? 'archived ' : '') + 'customers match “' + customerQuery.trim() + '”.' : showArchivedCustomers ? 'No archived customers.' : 'No customers yet. Click Add customer.'}</p>}
               </div>
             </>
-          )}
+            );
+          })()}
           {page === 'Expenses' && (
             <>
               <div className="sectionhead">
                 <div>
                   <h2>Business expenses</h2>
-
-                </div>                <button className="primary" onClick={() => open('Expense')}>
-                  <Plus size={17} /> Add expense
+                  <p className="section-sub">{plural(data.expenses.length, 'expense')} · total {money(expenses)}</p>
+                </div>
+                <button type="button" className="primary" onClick={() => open('Expense')}>
+                  <Plus size={17} aria-hidden="true" /> Add expense
                 </button>
-              </div>              <div className="panel tablewrap responsive-records expenses-responsive-table">
+              </div>
+              <div className="panel tablewrap responsive-records expenses-responsive-table">
                 <table>
+                  <caption className="sr-only">Business expenses</caption>
                   <thead>
                     <tr>
-                      <th>Expense</th>
-                      <th>Date</th>                      <th>Amount</th>
+                      <th scope="col">Expense</th>
+                      <th scope="col">Category</th>
+                      <th scope="col">Date</th>
+                      <th scope="col">Amount</th>
+                      <th scope="col">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.expenses.map(e => (
                       <tr key={e.id}>
-                        <td>
-                          <b>{e.name}</b>                        </td>
+                        <td><b>{e.name}</b></td>
+                        <td>{normalizeCategory(e.category) ? <span className="status">{e.category}</span> : <span className="muted">Uncategorised</span>}</td>
                         <td>{e.date}</td>
                         <td>{money(e.amount)}</td>
+                        <td><div className="action-buttons">
+                          <button type="button" className="icon-action" aria-label={'Edit expense '+e.name} title="Edit expense" disabled={recordBusy} onClick={()=>editExpense(e)}><Pencil size={17} aria-hidden="true"/></button>
+                          <button type="button" className="delete-action" aria-label={'Delete expense '+e.name} title="Delete expense" disabled={recordBusy||saving} onClick={()=>deleteExpense(e)}><Trash2 size={17} aria-hidden="true"/></button>
+                        </div></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
                 {!data.expenses.length && (
-                  <p className="empty">No expenses yet.</p>
+                  <p className="empty">No expenses yet. Add supplies, shipping, marketing and other costs to see your real profit.</p>
                 )}
               </div>
             </>
@@ -2034,45 +2279,51 @@ function App() {
             <>
               <div className="sectionhead">
                 <div>
-                  <h2>Content calendar</h2>
-                  
+                  <h2>Content plan</h2>
+                  <p className="section-sub">{plural(data.posts.length, 'planned post')} · {plural((data.notes||[]).length, 'note')}</p>
                 </div>
                 <div className="section-actions">
-                  <button type="button" className="secondary-action" onClick={()=>open('Note')}><NotebookPen size={17}/> Add note</button>
-                  <button className="primary" onClick={() => open('Post')}><Plus size={17}/> Plan post</button>
+                  <button type="button" className="secondary-action" onClick={()=>open('Note')}><NotebookPen size={17} aria-hidden="true"/> Add note</button>
+                  <button type="button" className="primary" onClick={() => open('Post')}><Plus size={17} aria-hidden="true"/> Plan post</button>
                 </div>
               </div>
               <div className="notes-section">
                 <h3>My notes</h3>
                 {(data.notes||[]).length>0 ? <div className="notes-grid">
                   {(data.notes||[]).map(note=><div className="note-card" key={note.id}>
-                    <div className="note-card-heading"><b>{note.important&&<Star size={14} className="important-note-star"/>}{note.title}</b>
-                      <button className="icon-action" type="button" aria-label={'Edit note '+note.title} onClick={()=>editNote(note)}><Pencil size={16}/></button>
+                    <div className="note-card-heading"><b>{note.important&&<Star size={14} className="important-note-star" aria-label="Important"/>}{note.title}</b>
+                      <span className="row-actions">
+                        <button className="icon-action" type="button" aria-label={'Edit note '+note.title} title="Edit note" disabled={recordBusy} onClick={()=>editNote(note)}><Pencil size={16} aria-hidden="true"/></button>
+                        <button className="delete-action" type="button" aria-label={'Delete note '+note.title} title="Delete note" disabled={recordBusy||saving} onClick={()=>deleteNote(note)}><Trash2 size={16} aria-hidden="true"/></button>
+                      </span>
                     </div>
                     <p>{note.body}</p><small>{note.date}</small>
                   </div>)}
-                </div> : <p className="empty">No notes yet. Save ideas, reminders and campaign details here.</p>}              </div>
+                </div> : <p className="empty">No notes yet. Save ideas, reminders and campaign details here.</p>}
+              </div>
               <div className="panel tablewrap responsive-records posts-responsive-table">
                 <table>
+                  <caption className="sr-only">Planned posts</caption>
                   <thead>
                     <tr>
-                      <th>Platform</th>
-                      <th>Content idea</th>
-                      <th>Post date</th>
-                      <th>Status</th>
+                      <th scope="col">Platform</th>
+                      <th scope="col">Content idea</th>
+                      <th scope="col">Post date</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.posts.map(p => (
                       <tr key={p.id}>
-                        <td>
-                          <b>{p.platform}</b>
-                        </td>
+                        <td><b>{p.platform}</b></td>
                         <td>{p.caption}</td>
                         <td>{p.date}</td>
-                        <td>
-                          <span className="status">{p.status}</span>
-                        </td>
+                        <td><span className="status">{p.status}</span></td>
+                        <td><div className="action-buttons">
+                          <button type="button" className="icon-action" aria-label={'Edit post '+p.caption.slice(0,40)} title="Edit post" disabled={recordBusy} onClick={()=>editPost(p)}><Pencil size={17} aria-hidden="true"/></button>
+                          <button type="button" className="delete-action" aria-label={'Delete post '+p.caption.slice(0,40)} title="Delete post" disabled={recordBusy||saving} onClick={()=>deletePost(p)}><Trash2 size={17} aria-hidden="true"/></button>
+                        </div></td>
                       </tr>
                     ))}
                   </tbody>
@@ -2085,77 +2336,55 @@ function App() {
           )}
           {page === 'Pricing Lab' && (
             <>
-              <div className="sectionhead">                <div>
+              <div className="sectionhead">
+                <div>
                   <h2>Smart pricing assistant</h2>
-
+                  <p className="section-sub">Work out the lowest price that still covers your costs, fees and the profit you want.</p>
                 </div>
               </div>
               <div className="pricing">
                 <div className="panel">
                   <h3>Your costs</h3>
-                  <label className="field">
-                    <span>Choose product</span>
-                    <select
-                      value={calcId}
-                      onChange={e => setCalcId(e.target.value)}
-                    >
-                      {data.products.map(p => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}                        </option>
-                      ))}
+                  {activeProducts.length === 0 ? <p className="empty">Add a product first, then come back to price it.</p> : (
+                  <div className="field">
+                    <label htmlFor="pricing-product"><span>Choose product</span></label>
+                    <select id="pricing-product" value={pricingP?.id || ''} onChange={e => setCalcId(e.target.value)}>
+                      {activeProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
-                  </label>
-                  {[
-                    ['Packaging', pack, setPack],
-                    ['Shipping', ship, setShip],
-                    ['Desired contribution', desired, setDesired],
-                    ['Percentage fee', fee, setFee],
-                    ['Fixed fee', fixed, setFixed],
-                  ].map(([name, v, fn]) => (
-                    <label className="field" key={String(name)}>
-                      <span>
-                        {String(name)}{' '}
-                        {name === 'Percentage fee' ? '(%)' : '(' + currencyCode + ')'}
-                      </span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        max={name==='Percentage fee'?99.99:1000000000}
-                        value={v as number}
-                        onChange={e =>
-                          (fn as (n: number) => void)(
-                            Math.min(name==='Percentage fee'?99.99:1000000000,Math.max(0,Number(e.target.value)||0))
-                          )
-                        }
-                      />
-                    </label>
-                  ))}
+                  </div>)}
+                  {(['pack','ship','desired','fee','fixed'] as PricingField[]).map(key => {
+                    const err = pricingResult.errors[key];
+                    const id = 'pricing-' + key;
+                    return (
+                    <div className={'field' + (err ? ' has-error' : '')} key={key}>
+                      <label htmlFor={id}><span>{PRICING_LABELS[key]} {key === 'fee' ? '(%)' : '(' + currencyCode + ')'}</span></label>
+                      <input id={id} type="text" inputMode="decimal" autoComplete="off" value={pricing[key]}
+                        aria-invalid={err ? true : undefined} aria-describedby={err ? id + '-error' : undefined}
+                        onChange={e => setPricing(current => ({ ...current, [key]: e.target.value }))}/>
+                      {err && <small id={id + '-error'} className="field-error" role="alert">{err}</small>}
+                    </div>);
+                  })}
+                  <p className="field-hint">Enter 0 for anything that does not apply. Values are checked, never silently changed.</p>
                 </div>
-                <div className="priceoutput">
+                <div className="priceoutput" aria-live="polite">
                   <div className="eyebrow">SUGGESTED MINIMUM SELLING PRICE</div>
-                  <div className="huge">{pricingP&&Number.isFinite(recommended)&&fee<100?money(recommended):'—'}</div>
-                  <p>
-                    Based on your entered costs, estimated fees and target
-                    contribution.
-                  </p>
+                  <div className="huge">{pricingP && pricingResult.valid && pricingResult.price !== null ? money(pricingResult.price) : '—'}</div>
+                  <p>Based on your entered costs, estimated fees and target contribution.</p>
+                  {!pricingResult.valid && Object.keys(pricingResult.errors).length > 0 &&
+                    <p className="pricing-note" role="alert">Fix the highlighted fields to see a price.</p>}
+                  {pricingResult.warnings.map(w => <p className="pricing-warning" key={w} role="status">⚠ {w}</p>)}
                   <div className="breakdown">
-                    <div>
-                      <span>Unit product cost</span>
-                      <b>{money(pricingP?.cost || 0)}</b>
-                    </div>
-                    <div>
-                      <span>Packaging + shipping</span>
-                      <b>{money(pack + ship)}</b>
-                    </div>
-                    <div>
-                      <span>Your target contribution</span>                      <b>{money(desired)}</b>
-                    </div>
-                    <div>
-                      <span>Variable fee</span>
-                      <b>{fee}%</b>
-                    </div>
+                    <div><span>Unit product cost</span><b>{money(pricingP?.cost || 0)}</b></div>
+                    <div><span>Packaging + shipping</span><b>{pricingResult.valid ? money((Number(pricing.pack) || 0) + (Number(pricing.ship) || 0)) : '—'}</b></div>
+                    <div><span>Your target contribution</span><b>{pricingResult.valid ? money(Number(pricing.desired)) : '—'}</b></div>
+                    <div><span>Fees at this price</span><b>{pricingResult.feeAmount !== null ? money(pricingResult.feeAmount) : '—'}</b></div>
+                    <div><span>Profit margin</span><b>{pricingResult.marginPct !== null ? pricingResult.marginPct.toFixed(1) + '%' : '—'}</b></div>
+                    <div><span>Markup on cost</span><b>{pricingResult.markupPct !== null ? pricingResult.markupPct.toFixed(1) + '%' : '—'}</b></div>
                   </div>
+                  <details className="pricing-explain">
+                    <summary>Margin vs markup — what’s the difference?</summary>
+                    <p><b>Margin</b> is profit as a share of the selling price. <b>Markup</b> is profit as a share of what the item costs you (product + packaging + shipping). The same sale always has a higher markup than margin.</p>
+                  </details>
                   <small>
                     Not a market price recommendation. Taxes, refunds and
                     channel-specific charges may apply.
@@ -2167,10 +2396,8 @@ function App() {
         </section>
       </main>
       {logoPreviewOpen && logoUrl && (
-        <div className="modalback logo-preview-backdrop" role="presentation"
-          onMouseDown={() => { if (!logoBusy) setLogoPreviewOpen(false); }}>
-          <div className="logo-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="logo-preview-title"
-            onMouseDown={event => event.stopPropagation()}>
+        <Dialog titleId="logo-preview-title" backdropClassName="modalback logo-preview-backdrop" className="logo-preview-dialog"
+          onClose={() => { if (!logoBusy) setLogoPreviewOpen(false); }}>
             <div className="logo-preview-head">
               <div><h2 id="logo-preview-title">Business logo</h2>
                 <p>{profile.businessName || 'Your business'}</p>
@@ -2189,13 +2416,12 @@ function App() {
                   disabled={logoBusy} onChange={uploadLogo}/>
               </label>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
       {orderAction && selectedActionOrder && (
-        <div className="modalback" onMouseDown={() => { if (!saving) { setOrderAction(null); setActionError(''); } }}>
-          <div className="modal order-action-dialog" role="dialog" aria-modal="true"
-            aria-labelledby="order-action-title" onMouseDown={e => e.stopPropagation()}>
+        <Dialog titleId="order-action-title" className="modal order-action-dialog" backdropDismiss={false}
+          role={orderAction.kind === 'delete' || orderAction.kind === 'cancel' ? 'alertdialog' : 'dialog'}
+          onClose={() => { if (!saving) { setOrderAction(null); setActionError(''); } }}>
             <div className="modalhead">
               <div>
                 <h2 id="order-action-title">{orderAction.kind === 'complete' ? 'Review payment & complete order' : orderAction.kind === 'delete' ? 'Delete this order?' : orderAction.kind === 'cancel' ? 'Cancel order & manage refund' : 'Record refund'}</h2>
@@ -2313,33 +2539,32 @@ function App() {
                   actionRemaining > 0.001 ? 'Complete with pending payment' : 'Confirm completed & paid'}
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
       {invoiceOrder && (
-        <div className="modalback invoice-backdrop" onMouseDown={()=>setInvoiceOrder(null)}>
-          <div className="invoice-dialog" role="dialog" aria-modal="true" aria-labelledby="invoice-preview-title"
-            onMouseDown={e=>e.stopPropagation()}>
+        <Dialog titleId="invoice-preview-title" backdropClassName="modalback invoice-backdrop" className="invoice-dialog"
+          onClose={()=>setInvoiceOrder(null)}>
             <div className="invoice-toolbar">
               <h2 id="invoice-preview-title">A4 Invoice Preview</h2>
               <div>
                 <button className="invoice-download-btn" type="button" disabled={invoiceDownloading}
                   onClick={()=>void downloadInvoice()}><Download size={18}/>{invoiceDownloading?'Generating PDF…':'Download PDF'}</button>
                 <button className="primary" type="button" onClick={()=>window.print()}><Printer size={17}/> Print</button>
-                <button className="close" type="button" aria-label="Close invoice" onClick={()=>setInvoiceOrder(null)}><X size={19}/></button>
+                <button className="close" type="button" aria-label="Close invoice preview" onClick={()=>setInvoiceOrder(null)}><X size={19} aria-hidden="true"/></button>
               </div>
             </div>
             <div className="invoice-print-root" tabIndex={0} role="region" aria-label="Scrollable A4 invoice">
               <div className="invoice-classic-page">
                 <svg className="invoice-classic-wave invoice-classic-wave-top" viewBox="0 0 1000 150" preserveAspectRatio="none" aria-hidden="true">
-                  <defs><linearGradient id="invoice-blue-top" x1="0" x2="1"><stop offset="0%" stopColor="#0e214b"/><stop offset="48%" stopColor="#1660ac"/><stop offset="100%" stopColor="#0e214b"/></linearGradient></defs>
+                  <defs><linearGradient id="invoice-blue-top" x1="0" x2="1"><stop offset="0%" stopColor="#0c5a4b"/><stop offset="48%" stopColor="#1c9881"/><stop offset="100%" stopColor="#0c5a4b"/></linearGradient></defs>
                   <path d="M0 0 H1000 V70 C720 118 567 77 429 54 C234 17 120 31 0 144 Z" fill="url(#invoice-blue-top)"/>
                 </svg>                <div className="invoice-classic-body">
                   <div className="invoice-classic-heading">
                     <div><h1>INVOICE</h1><p>Invoice Number: {invoiceOrder.id}</p><p>Date: {invoiceOrder.date}</p></div>
                     <div className="invoice-classic-brand">
-                      <strong>{profile.businessName || 'My Business'}</strong>
-                      {logoUrl ? <img src={logoUrl} alt="Business logo"/> : <span className="invoice-classic-geometric-mark" aria-hidden="true"/>}
+                      {profile.businessName.trim() && <strong>{profile.businessName.trim()}</strong>}
+                      {logoUrl && <img src={logoUrl} alt={(profile.businessName.trim() || 'Business') + ' logo'}/>}
+                      {!profile.businessName.trim() && !logoUrl && <span className="invoice-setup-hint no-print">Add your business name and logo in Profile so they appear here.</span>}
                     </div>
                   </div>
                   <div className="invoice-classic-info">
@@ -2393,23 +2618,21 @@ function App() {
                   </div>
                 </div>
                 <svg className="invoice-classic-wave invoice-classic-wave-bottom" viewBox="0 0 1000 145" preserveAspectRatio="none" aria-hidden="true">
-                  <defs><linearGradient id="invoice-blue-bottom" x1="0" x2="1"><stop offset="0%" stopColor="#102250"/><stop offset="51%" stopColor="#165faa"/><stop offset="100%" stopColor="#102250"/></linearGradient></defs>
+                  <defs><linearGradient id="invoice-blue-bottom" x1="0" x2="1"><stop offset="0%" stopColor="#0c5a4b"/><stop offset="51%" stopColor="#1c9881"/><stop offset="100%" stopColor="#0c5a4b"/></linearGradient></defs>
                   <path d="M0 55 C208 12 409 100 614 109 C793 124 889 65 1000 0 V145 H0 Z" fill="url(#invoice-blue-bottom)"/>
                 </svg>
               </div>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
       {currencyModal && (
-        <div className="modalback" onMouseDown={() => { if(!currencyBusy) setCurrencyModal(false); }}>
-          <div className="modal currency-modal" role="dialog" aria-modal="true" aria-labelledby="currency-title"
-            onMouseDown={event => event.stopPropagation()}>
+        <Dialog titleId="currency-title" className="modal currency-modal" backdropDismiss={false}
+          onClose={() => { if(!currencyBusy) setCurrencyModal(false); }}>
             <div className="modalhead">
               <div><h2 id="currency-title">Change Currency</h2>
                 <p>Use an exchange rate to convert your existing business amounts.</p></div>
-              <button type="button" className="close" disabled={currencyBusy}
-                onClick={() => setCurrencyModal(false)}><X size={19}/></button>
+              <button type="button" className="close" aria-label="Close currency dialog" disabled={currencyBusy}
+                onClick={() => setCurrencyModal(false)}><X size={19} aria-hidden="true"/></button>
             </div>
             <label className="field"><span>Current currency</span><input value={currencyCode} readOnly/></label>
             <label className="field"><span>New currency</span>
@@ -2434,16 +2657,14 @@ function App() {
               <button type="button" className="primary" disabled={currencyBusy || !fxQuote || currencyTarget === currencyCode}
                 onClick={() => void applyCurrencyConversion()}>{currencyBusy ? 'Converting…' : 'Convert all amounts'}</button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
-      {passwordHelp && <div className="modalback" onMouseDown={closePasswordDialog}>
-        <div className="modal account-help" role="dialog" aria-modal="true" aria-labelledby="password-title"
-          onMouseDown={event => event.stopPropagation()}>
+      {passwordHelp && <Dialog titleId="password-title" descId="password-desc" className="modal account-help" backdropDismiss={false}
+        onClose={() => { if (!pwBusy) closePasswordDialog(); }}>
           <div className="modalhead"><h2 id="password-title">Change Password</h2>
-            <button className="close" type="button" aria-label="Close" onClick={closePasswordDialog}><X size={20}/></button>
+            <button className="close" type="button" aria-label="Close change password dialog" disabled={pwBusy} onClick={closePasswordDialog}><X size={20}/></button>
           </div>
-          <p>Enter your current password, then choose a new one (at least 10 characters).</p>
+          <p id="password-desc">Enter your current password, then choose a new one (at least 10 characters).</p>
           <label className="field">Current password
             <input type="password" autoComplete="current-password" maxLength={200} value={pwCurrent} onChange={e=>setPwCurrent(e.target.value)}/></label>
           <label className="field">New password
@@ -2455,20 +2676,19 @@ function App() {
             <button type="button" className="action-cancel" disabled={pwBusy} onClick={closePasswordDialog}>{pwMessage?.ok ? 'Close' : 'Cancel'}</button>
             <button type="button" className="primary" disabled={pwBusy || !pwCurrent || !pwNew || !pwConfirm} onClick={() => void submitPasswordChange()}>{pwBusy ? 'Saving…' : 'Change password'}</button>
           </div>
-        </div>
-      </div>}
+      </Dialog>}
       {modal && (
-        <div className="modalback" onMouseDown={() => setModal('')}>          <div className="modal" onMouseDown={e => e.stopPropagation()}>
+        <Dialog titleId="record-modal-title" descId="record-modal-desc" className="modal record-modal" backdropDismiss={false} onClose={closeModal} initialFocusSelector="#record-name, #record-customer, #record-title, #record-platform">
             <div className="modalhead">
               <div>
-                <h2>{editingId ? 'Edit ' : 'Add '}{modal.toLowerCase()}</h2>
-                
+                <h2 id="record-modal-title">{editingId ? 'Edit ' : 'Add '}{modal.toLowerCase()}</h2>
+                <p id="record-modal-desc">Fields marked * are required. Nothing is saved until you press {editingId ? '“Save changes”' : '“Save”'}.</p>
               </div>
-              <button className="close" onClick={() => setModal('')}>
-                <X size={21} />
+              <button type="button" className="close" aria-label={'Close ' + modal.toLowerCase() + ' form'} onClick={closeModal}>
+                <X size={21} aria-hidden="true" />
               </button>
             </div>
-            <form onSubmit={submit}>
+            <form onSubmit={submit} noValidate aria-busy={saving}>
               {modal === 'Product' && (
                 <>
                   <div className="product-photo-form">
@@ -2494,24 +2714,25 @@ function App() {
                         </button>}
                     </div>
                   </div>
-                  <Field form={form} change={change} name="name" label="Product name" />
-                  <Field form={form} change={change} name="sku" label="SKU (unique code)" />
+                  <Field form={form} change={change} name="name" label="Product name" required error={errors.name} />
+                  <Field form={form} change={change} name="sku" label="SKU (unique code)" required error={errors.sku} hint="Each SKU can be used once, including by archived products." />
                   <div className="formgrid">
                     <Field form={form} change={change}
                       name="price"
                       label={`Selling price (${currencyCode})`}
-                      type="number"
+                      type="number" required error={errors.price}
                     />
-                    <Field form={form} change={change} name="cost" label={`Unit cost (${currencyCode})`} type="number" />
-                    <Field form={form} change={change} name="stock" label="Starting stock" type="number" />
-                    <Field form={form} change={change} name="min" label="Restock threshold" type="number" />
+                    <Field form={form} change={change} name="cost" label={`Unit cost (${currencyCode})`} type="number" required error={errors.cost} />
+                    <Field form={form} change={change} name="stock" label={editingId ? 'Stock quantity' : 'Starting stock'} type="number" required error={errors.stock}
+                      hint={editingId ? 'Total units you hold. Available = stock minus units on active orders.' : 'Units on hand right now.'} />
+                    <Field form={form} change={change} name="min" label="Restock threshold" type="number" required error={errors.min} hint="Low-stock alert appears at or below this number." />
                   </div>
                 </>
               )}
               {modal === 'Order' && (
                 <>
                   <div className="customer-suggestions-wrap">
-                    <Field form={form} change={change} name="customer" label="Customer name"/>
+                    <Field form={form} change={change} name="customer" label="Customer name" required error={errors.customer}/>
                     {customerMatches.length>0&&<div className="customer-suggestions" role="listbox">
                       {customerMatches.map(name=><button type="button" key={name} onClick={()=>change('customer',name)}>{name}</button>)}
                     </div>}
@@ -2522,8 +2743,9 @@ function App() {
                       <input type="search" autoComplete="off" value={productQuery}
                         placeholder="Type to find products and add them…" onFocus={()=>setProductSearchOpen(true)}
                         onChange={event=>{setProductQuery(event.target.value);setProductSearchOpen(true);}}
-                        aria-label="Search products"/>
+                        id="product-search" aria-label="Search products" aria-invalid={errors.products ? true : undefined} aria-describedby={errors.products ? 'record-products-error' : undefined}/>
                     </label>
+                    {errors.products && <small id="record-products-error" className="field-error" role="alert">{errors.products}</small>}
                     {productSearchOpen&&<div className="product-results" role="listbox" aria-label="Matching products">
                       {productMatches.length ? productMatches.map(p=><button type="button" key={p.id}
                         onClick={()=>addDraftProduct(p)}>
@@ -2532,7 +2754,7 @@ function App() {
                     </div>}
                   </div>
                   <div className="order-line-list">
-                    <div className="order-lines-title"><b>Products in this order</b><small>{draftItems.length} unique item(s)</small></div>
+                    <div className="order-lines-title"><b>Products in this order</b><small>{plural(draftItems.length, 'unique item')}</small></div>
                     {draftItems.length===0&&<p className="empty">Search and select products above. You can add several products to one order.</p>}
                     {draftItems.map(line=><div className="order-line-row" key={line.productId}>
                       <div className="order-line-description"><b>{line.name}</b><small>{line.sku} · {money(line.unitPrice)} each</small></div>
@@ -2545,9 +2767,10 @@ function App() {
                         onClick={()=>setDraftItems(items=>items.filter(item=>item.productId!==line.productId))}><X size={17}/></button>
                     </div>)}
                   </div>
-                  <div className="formgrid">
-                    <Field form={form} change={change} name="shipping" label={`Shipping charged (${currencyCode})`} type="number"/>
-                    <Field form={form} change={change} name="discount" label="Discount (%)" type="number"/>                    <Field form={form} change={change} name="tax" label={`Tax charged (${currencyCode})`} type="number"/>
+                  <div className="formgrid cols-3">
+                    <Field form={form} change={change} name="shipping" label={`Shipping charged (${currencyCode})`} type="number" error={errors.shipping}/>
+                    <Field form={form} change={change} name="discount" label="Discount (%)" type="number" error={errors.discount}/>
+                    <Field form={form} change={change} name="tax" label={`Tax charged (${currencyCode})`} type="number" error={errors.tax}/>
                   </div>
                   <div className="order-summary" aria-live="polite">
                     <h3>Order summary</h3>
@@ -2557,9 +2780,9 @@ function App() {
                     <div><span>Discount ({draftDiscountPercent}%)</span><b>−{money(draftDiscount)}</b></div>
                     <div className="order-total"><span>Total customer owes</span><b>{money(draftTotal)}</b></div>
                   </div>
-                  <Field form={form} change={change} name="paid" label={`Payment received (${currencyCode})`} type="number"/>
+                  <Field form={form} change={change} name="paid" label={`Payment received (${currencyCode})`} type="number" required error={errors.paid} hint="Enter 0 if the customer has not paid yet."/>
                   <div className="remaining">Remaining to collect: <strong>{money(Math.max(0,draftTotal-draftPaid))}</strong></div>
-                  <Field form={form} change={change} name="scheduledDate" label="Scheduled / delivery date (optional)" type="date"/>
+                  <Field form={form} change={change} name="scheduledDate" label="Scheduled / delivery date (optional)" type="date" error={errors.scheduledDate}/>
                   <Field form={form} change={change} name="status" label="Order status"
                     options={(editingId?['New','Planned','Processing','Completed','Cancelled']:['New','Planned','Processing','Completed'])
                       .map(value=>({value,label:value}))}/>
@@ -2568,25 +2791,25 @@ function App() {
               )}
               {modal === 'Customer' && (
                 <>
-                  <Field form={form} change={change} name="name" label="Full customer name *"/>
+                  <Field form={form} change={change} name="name" label="Full customer name" required error={errors.name}/>
                   <div className="formgrid">
-                    <Field form={form} change={change} name="email" label="Email address" type="email"/>
-                    <Field form={form} change={change} name="phone" label="Phone / WhatsApp"/>
+                    <Field form={form} change={change} name="email" label="Email address" type="email" error={errors.email}/>
+                    <Field form={form} change={change} name="phone" label="Phone / WhatsApp" error={errors.phone}/>
                     <Field form={form} change={change} name="company" label="Company / shop"/>
                     <Field form={form} change={change} name="city" label="City"/>
                     <Field form={form} change={change} name="country" label="Country"/>
                     <Field form={form} change={change} name="address" label="Street address"/>
                   </div>
-                  <label className="field"><span>Internal notes</span><textarea rows={3} value={form.notes||''}
-                    onChange={e=>change('notes',e.target.value)} placeholder="Delivery notes, preferences, etc."/></label>
+                  <div className={'field'+(errors.notes?' has-error':'')}><label htmlFor="record-notes"><span>Internal notes</span></label><textarea id="record-notes" rows={3} value={form.notes||''} maxLength={2000} aria-invalid={errors.notes?true:undefined} aria-describedby={errors.notes?'record-notes-error':undefined}
+                    onChange={e=>change('notes',e.target.value)} placeholder="Delivery notes, preferences, etc."/>{errors.notes&&<small id="record-notes-error" className="field-error" role="alert">{errors.notes}</small>}</div>
                 </>
               )}              {modal === 'Note' && (
                 <>
-                  <Field form={form} change={change} name="title" label="Note title"/>
-                  <label className="field"><span>Details *</span>
-                    <textarea rows={5} value={form.body||''} onChange={e=>change('body',e.target.value)}
-                      placeholder="Write your ideas, tasks or reminders here…"/></label>
-                  <Field form={form} change={change} name="date" label="Reminder / note date" type="date"/>
+                  <Field form={form} change={change} name="title" label="Note title" required error={errors.title}/>
+                  <div className={'field'+(errors.body?' has-error':'')}><label htmlFor="record-body"><span>Details<span className="required-mark" aria-hidden="true"> *</span><span className="sr-only"> (required)</span></span></label>
+                    <textarea id="record-body" rows={5} value={form.body||''} maxLength={4000} aria-required="true" aria-invalid={errors.body?true:undefined} aria-describedby={errors.body?'record-body-error':undefined} onChange={e=>change('body',e.target.value)}
+                      placeholder="Write your ideas, tasks or reminders here…"/>{errors.body&&<small id="record-body-error" className="field-error" role="alert">{errors.body}</small>}</div>
+                  <Field form={form} change={change} name="date" label="Reminder / note date" type="date" error={errors.date}/>
                   <label className="important-note-label">
                     <input type="checkbox" checked={form.important==='true'}
                       onChange={event=>change('important',event.target.checked?'true':'false')}/>
@@ -2596,28 +2819,27 @@ function App() {
               )}
               {modal === 'Expense' && (
                 <>
-                  <Field form={form} change={change} name="name" label="Expense description" />
-                  <Field form={form} change={change} name="amount" label={`Amount (${currencyCode})`} type="number" />
-                  <Field form={form} change={change} name="date" label="Date" type="date" />
+                  <Field form={form} change={change} name="name" label="Expense description" required error={errors.name} />
+                  <div className="formgrid">
+                    <Field form={form} change={change} name="amount" label={`Amount (${currencyCode})`} type="number" required error={errors.amount} />
+                    <Field form={form} change={change} name="date" label="Date" type="date" error={errors.date} />
+                  </div>
+                  <Field form={form} change={change} name="category" label="Category (optional)" error={errors.category}
+                    options={EXPENSE_CATEGORIES.map(v => ({ value: v, label: v }))} />
                 </>
               )}
               {modal === 'Post' && (
                 <>
                   <Field form={form} change={change}
-                    name="platform"                    label="Platform"
-                    options={[
-                      'Instagram',
-                      'Pinterest',
-                      'TikTok',
-                      'Facebook',
-                    ].map(v => ({ value: v, label: v }))}
+                    name="platform" label="Platform" required error={errors.platform}
+                    options={POST_PLATFORMS.map(v => ({ value: v, label: v }))}
                   />
-                  <Field form={form} change={change} name="caption" label="Content idea or caption" />
-                  <Field form={form} change={change} name="date" label="Scheduled date" type="date" />
+                  <Field form={form} change={change} name="caption" label="Content idea or caption" required error={errors.caption} />
+                  <Field form={form} change={change} name="date" label="Scheduled date" type="date" required error={errors.date} />
                   <Field form={form} change={change}
                     name="status"
-                    label="Status"
-                    options={['Draft', 'Planned', 'Posted'].map(v => ({
+                    label="Status" error={errors.status}
+                    options={POST_STATUSES.map(v => ({
                       value: v,
                       label: v,
                     }))}
@@ -2625,18 +2847,29 @@ function App() {
                 </>
               )}
               {error && (
-                <div className="formerror" role="alert" aria-live="assertive">
+                <div className="formerror" role="alert">
                   <AlertCircle size={16} />
                   {error}
                 </div>
               )}
-              <button type="submit" className="primary full" disabled={saving||productPhotoBusy}>
-                <CheckCircle2 size={17} /> {saving ? 'Saving…' : editingId ? 'Save changes' : 'Save ' + modal.toLowerCase()}
-              </button>
+              <div className="form-actions">
+                <button type="button" className="action-cancel" disabled={saving} onClick={closeModal}>Cancel</button>
+                <button type="submit" className="primary" disabled={saving||productPhotoBusy} aria-disabled={saving||productPhotoBusy}>
+                  <CheckCircle2 size={17} aria-hidden="true" /> {saving ? 'Saving…' : editingId ? 'Save changes' : 'Save ' + modal.toLowerCase()}
+                </button>
+              </div>
             </form>
-          </div>
+        </Dialog>
+      )}
+      {confirm && <ConfirmDialog state={confirm} onCancel={() => setConfirm(null)} />}
+      {(undoAction || actionNotice) && (
+        <div className="toast" role="status">
+          <span>{actionNotice || undoAction?.message}</span>
+          {undoAction && !actionNotice && <button type="button" onClick={() => void runUndo()} disabled={recordBusy || saving}>Undo</button>}
+          <button type="button" className="toast-close" aria-label="Dismiss message" onClick={() => { setUndoAction(null); setActionNotice(''); }}><X size={16} aria-hidden="true"/></button>
         </div>
       )}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{liveMessage}</div>
     </div>
   );
 }

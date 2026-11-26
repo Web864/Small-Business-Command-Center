@@ -1308,12 +1308,12 @@ header { justify-content: flex-start; }
 .invoice-classic-brand img {width:58px;height:58px;object-fit:contain;flex:0 0 auto;}
 .invoice-classic-geometric-mark {width:35px;height:44px;flex:0 0 auto;background:#f5c340;clip-path:polygon(0 0,33% 17%,33% 44%,65% 29%,65% 0,100% 16%,100% 100%,65% 79%,65% 55%,33% 75%,33% 100%,0 85%);}
 .invoice-classic-info {display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:8%;}
-.invoice-classic-info h3,.invoice-classic-terms h3 {font:800 clamp(10px,1.1vw,13px) Arial,sans-serif;margin:0 0 9px;color:#192d50;}
+.invoice-classic-info h3,.invoice-classic-terms h3 {font:800 clamp(10px,1.1vw,13px) Arial,sans-serif;margin:0 0 9px;color:#0f5547;}
 .invoice-classic-info > div {font:clamp(9px,1vw,12px)/1.6 Arial,sans-serif;color:#3d4652;overflow-wrap:anywhere;}
 .invoice-classic-info > div > strong {display:block;color:#25313e;font-size:1.05em;}
 .invoice-classic-contact {margin-top:4px;}
 .invoice-classic-table {width:100%;border:1px solid #9fa9b7;border-collapse:collapse;font-family:Arial,sans-serif;table-layout:fixed;}
-.invoice-classic-table th {background:#112f63!important;color:#fff!important;padding:11px 9px;letter-spacing:1.5px;font-size:clamp(9px,1.05vw,12px);font-weight:800;text-align:left;}
+.invoice-classic-table th {background:#0f6254!important;color:#fff!important;padding:11px 9px;letter-spacing:1.5px;font-size:clamp(9px,1.05vw,12px);font-weight:800;text-align:left;}
 .invoice-classic-table th:nth-child(1),.invoice-classic-table td:nth-child(1){width:10%;text-align:center;}
 .invoice-classic-table th:nth-child(2),.invoice-classic-table td:nth-child(2){width:44%;}
 .invoice-classic-table th:nth-child(3),.invoice-classic-table td:nth-child(3){width:23%;text-align:right;}
@@ -1326,8 +1326,8 @@ header { justify-content: flex-start; }
 .invoice-classic-totals {width:44%;flex:0 0 auto;font:clamp(9px,1vw,12px) Arial,sans-serif;}
 .invoice-classic-summary {border:1px solid #9fa9b7;padding:9px 12px;}
 .invoice-classic-summary>div,.invoice-classic-payment {display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;}
-.invoice-classic-total {margin-top:10px;background:#112f63!important;color:white!important;display:flex;justify-content:space-between;gap:10px;padding:12px;white-space:nowrap;font-weight:800;letter-spacing:.3px;}
-.invoice-classic-payment:last-child {font-weight:800;color:#183a70;}
+.invoice-classic-total {margin-top:10px;background:#0f6254!important;color:white!important;display:flex;justify-content:space-between;gap:10px;padding:12px;white-space:nowrap;font-weight:800;letter-spacing:.3px;}
+.invoice-classic-payment:last-child {font-weight:800;color:#0f5547;}
 .theme-dark .invoice-classic-page,.theme-warm .invoice-classic-page{background:#fff!important;color:#28313b!important;}
 @media (max-width:720px){
   .invoice-print-root{padding:8px!important;}
@@ -1934,3 +1934,141 @@ header { justify-content: flex-start; }
 
 
 
+
+/* ===================================================================
+   UI/UX remediation F1–F9 (accessibility, forms, tablet orders table,
+   touch targets, record management). Appended so it layers over the
+   existing teal design system without changing its identity.
+   =================================================================== */
+.sr-only{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
+.skip-link{position:absolute;left:12px;top:-60px;z-index:400;background:#167b68;color:#fff;padding:12px 18px;border-radius:0 0 10px 10px;font-weight:700;text-decoration:none;transition:top .12s;}
+.skip-link:focus{top:0;outline:3px solid #fff;outline-offset:-6px;box-shadow:0 0 0 3px #0f5547;}
+main:focus{outline:none;}
+:where(button,a,input,select,textarea,summary,[tabindex]):focus-visible{outline:3px solid #1c9881;outline-offset:2px;}
+.theme-dark :where(button,a,input,select,textarea,summary,[tabindex]):focus-visible{outline-color:#7fe0c9;}
+[inert]{pointer-events:none;}
+
+/* F4 forms */
+.required-mark{color:#b3261e;font-weight:800;}
+.theme-dark .required-mark{color:#ff9d94;}
+.field-hint{display:block;margin-top:4px;color:#5d727a;font-size:12px;font-weight:500;line-height:1.35;}
+.theme-dark .field-hint{color:#b6c9cf;}
+.field-error{display:block;margin-top:4px;color:#b3261e;font-size:12px;font-weight:700;line-height:1.35;}
+.theme-dark .field-error{color:#ffb4ab;}
+.field.has-error input,.field.has-error select,.field.has-error textarea{border-color:#b3261e;box-shadow:0 0 0 1px #b3261e;}
+.field textarea{width:100%;border:1px solid #dfe7e9;border-radius:8px;padding:12px;font:inherit;color:inherit;background:#fff;min-width:0;}
+.theme-dark .field textarea{background:#1d303a;border-color:#47625f;color:#e5f3ef;}
+.formgrid.cols-3{grid-template-columns:repeat(3,minmax(0,1fr));}
+.record-modal .form-actions,.form-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;}
+.form-actions .primary,.form-actions .action-cancel{min-height:44px;margin:0;}
+.formerror{background:#fdecea;border:1px solid #f3b7b1;color:#8c1d18;border-radius:9px;padding:10px 12px;display:flex;gap:8px;align-items:flex-start;font-weight:600;margin:10px 0;}
+.theme-dark .formerror{background:#4a2a2d;border-color:#8a4a50;color:#ffd9d6;}
+.confirm-dialog{max-width:460px;}
+.confirm-message{line-height:1.5;margin:6px 0 18px;}
+.record-modal{overflow-y:auto;-webkit-overflow-scrolling:touch;}
+
+/* F9 record management */
+.section-sub{margin:2px 0 0;color:#5d727a;font-size:13px;font-weight:500;}
+.theme-dark .section-sub{color:#b6c9cf;}
+.record-toolbar{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:14px;}
+.record-toolbar .catalog-filter-wrap{flex:1 1 280px;margin-bottom:0;}
+.segmented{display:inline-flex;border:1px solid #cfe2dc;border-radius:10px;overflow:hidden;background:#f1f8f5;}
+.segmented button{border:0;background:transparent;padding:10px 14px;font-weight:700;color:#1b6e5c;min-height:44px;cursor:pointer;}
+.segmented button[aria-pressed="true"]{background:#167b68;color:#fff;}
+.theme-dark .segmented{background:#223842;border-color:#47625f;}
+.theme-dark .segmented button{color:#cdeee2;}
+.theme-dark .segmented button[aria-pressed="true"]{background:#1c9881;color:#06231d;}
+.archived-badge{position:absolute;left:10px;top:10px;background:#5b6b72;color:#fff;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:800;}
+.archived-badge.inline{position:static;display:inline-block;margin-left:8px;vertical-align:middle;}
+.catalog-card.is-archived .catalog-photo{filter:grayscale(.85);opacity:.85;}
+.row-actions{display:inline-flex;gap:8px;align-items:center;}
+.muted{color:#6b7e85;}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:300;display:flex;gap:12px;align-items:center;background:#12312b;color:#fff;padding:12px 14px;border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.28);max-width:min(560px,calc(100vw - 24px));}
+.toast button{background:#fff;color:#0f5547;border:0;border-radius:8px;padding:8px 14px;font-weight:800;min-height:40px;cursor:pointer;}
+.toast .toast-close{background:transparent;color:#fff;padding:6px;min-width:40px;}
+
+/* F5 pricing lab */
+.pricing-warning{background:#fff4d6;color:#6b4a00;border-radius:9px;padding:9px 11px;margin:8px 0;font-size:13px;font-weight:600;line-height:1.4;}
+.pricing-note{background:#fdecea;color:#8c1d18;border-radius:9px;padding:9px 11px;font-weight:700;}
+.pricing-explain{margin:12px 0;font-size:13px;}
+.pricing-explain summary{cursor:pointer;font-weight:700;min-height:32px;}
+.pricing-explain p{margin:6px 0 0;line-height:1.5;}
+
+/* F7 header-logo placeholder in dark / warm themes */
+.theme-dark .header-business-logo:not(.header-business-logo-button){background:#1d3a40;border:1px dashed #78c9b6;color:#c6f4e6;}
+.theme-dark .header-business-logo:not(.header-business-logo-button) .logo-caption{color:#c6f4e6;}
+.theme-warm .header-business-logo:not(.header-business-logo-button){background:#f6e8d6;border:1px dashed #b98f69;color:#7a5435;}
+
+/* F3 expenses / posts card labels now that Category / Actions columns exist */
+@media screen and (max-width:640px){
+  .shell .expenses-responsive-table td:nth-child(2):before{content:'Category';}
+  .shell .expenses-responsive-table td:nth-child(3):before{content:'Date';}
+  .shell .expenses-responsive-table td:nth-child(4):before{content:'Amount';}
+  .shell .expenses-responsive-table td:nth-child(5):before{content:'Actions';}
+  .shell .posts-responsive-table td:nth-child(5):before{content:'Actions';}
+  .shell .formgrid.cols-3{grid-template-columns:repeat(2,minmax(0,1fr));}
+}
+@media screen and (max-width:420px){
+  .shell .formgrid,.shell .formgrid.cols-3{grid-template-columns:minmax(0,1fr);}
+}
+
+/* F3 Orders: switch to readable cards whenever the table area is narrower than 900px
+   (this covers 768–1024px viewports with the sidebar open). Amounts / badges never wrap. */
+.orders-responsive-table{container-type:inline-size;}
+.orders-responsive-table .cell-amount,.orders-responsive-table .cell-qty,.orders-responsive-table .cell-status .status,.orders-responsive-table .refund-status{white-space:nowrap;}
+.orders-responsive-table .cell-id,.orders-responsive-table .cell-customer,.orders-responsive-table .cell-items{overflow-wrap:anywhere;word-break:break-word;}
+@container (max-width: 900px){
+  .shell .orders-responsive-table table,.shell .orders-responsive-table tbody{display:block;width:100%;min-width:0!important;}
+  .shell .orders-responsive-table thead{position:absolute;width:1px;height:1px;clip:rect(0,0,0,0);overflow:hidden;}
+  .shell .orders-responsive-table tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 14px;padding:14px;margin:0 0 12px;border:1px solid var(--ui-border);background:var(--ui-card);border-radius:13px;}
+  .shell .orders-responsive-table td{display:block;min-width:0;padding:9px 0;border:0;border-bottom:1px solid var(--ui-border);font-size:13px;}
+  .shell .orders-responsive-table td:before{display:block;margin-bottom:4px;color:var(--ui-muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.25px;}
+  .shell .orders-responsive-table td:first-child,.shell .orders-responsive-table td:nth-child(3),.shell .orders-responsive-table td:last-child{grid-column:1/-1;}
+  .shell .orders-responsive-table td:last-child{border-bottom:0;}
+  .shell .orders-responsive-table .action-buttons{flex-wrap:wrap;white-space:normal;}
+}
+@container (max-width: 560px){
+  .shell .orders-responsive-table tr{grid-template-columns:repeat(2,minmax(0,1fr));}
+}
+@container (max-width: 900px){
+  .shell .orders-responsive-table td:nth-child(1):before{content:'Order';}
+  .shell .orders-responsive-table td:nth-child(2):before{content:'Customer';}
+  .shell .orders-responsive-table td:nth-child(3):before{content:'Items';}
+  .shell .orders-responsive-table td:nth-child(4):before{content:'Quantity';}
+  .shell .orders-responsive-table td:nth-child(5):before{content:'Total';}
+  .shell .orders-responsive-table td:nth-child(6):before{content:'Received';}
+  .shell .orders-responsive-table td:nth-child(7):before{content:'Refunded';}
+  .shell .orders-responsive-table td:nth-child(8):before{content:'Payment / refund';}
+  .shell .orders-responsive-table td:nth-child(9):before{content:'Status';}
+  .shell .orders-responsive-table td:nth-child(10):before{content:'Actions';}
+}
+
+/* F8 touch targets (~44px) on touch devices and narrow/tablet viewports */
+@media (pointer:coarse), (max-width:1024px){
+  .shell .nav,.shell .textbtn,.shell .sidebar-toggle,.shell .theme-toggle,.shell .close,.shell .icon-action,.shell .delete-action,
+  .shell .complete-action,.shell .refund-action,.shell .catalog-edit,.shell .stat-eye-button,.shell .logo-preview-close,
+  .shell .profile-media-remove,.shell .notification-item,.shell .theme-option,.shell .account-option,.shell .order-tab,
+  .shell .action-cancel,.shell .action-delete-confirm,.shell .security-button{min-height:44px;min-width:44px;}
+  .shell .action-buttons .icon-action,.shell .action-buttons .complete-action,.shell .action-buttons .delete-action,.shell .action-buttons .refund-action,
+  .shell .action-buttons .invoice-row-download{width:44px;height:44px;}
+  .shell .catalog-edit{width:44px;height:44px;}
+  .shell .stat-eye-button{width:44px;height:44px;}
+  .shell .field input,.shell .field select{min-height:44px;}
+  .shell .field input[type="checkbox"]{min-height:0;}
+  .shell .important-note-label{min-height:44px;}
+  .shell .primary,.shell .secondary-action{min-height:44px;}
+}
+@media (max-width:360px){
+  .toast{left:12px;right:12px;transform:none;}
+  .shell .record-toolbar .segmented{width:100%;}
+  .shell .segmented button{flex:1;}
+}
+@media print{.skip-link,.toast{display:none!important;}}
+.theme-dark .logo-caption{background:#102b30e6;color:#c6f4e6;}.theme-warm .logo-caption{background:#f6e8d6e6;color:#7a5435;}
+/* F6 invoice: no placeholder mark; A4 print/PDF page setup */
+.invoice-setup-hint{font:12px/1.4 Arial,sans-serif;color:#5d727a;max-width:220px;text-align:right;}
+@media print{
+  @page{size:A4 portrait;margin:0;}
+  .no-print,.invoice-toolbar{display:none!important;}
+  .invoice-classic-page{width:210mm!important;min-height:297mm!important;box-shadow:none!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+}
