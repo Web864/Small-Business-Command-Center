@@ -59,7 +59,7 @@ import { ChevronRight, ExternalLink } from 'lucide-react';
 import { Dialog, CloseButton, ConfirmDialog, type ConfirmState } from './components/Dialog';
 import { EXPENSE_CATEGORIES, POST_PLATFORMS, POST_STATUSES, activeOnly, archivedOnly, customerHasHistory, expenseCategoryLabel, greetingName, isArchived, normalizeCategory, plural, productHasHistory, selectableCustomerNames, setArchived, setCustomerArchived } from './lib/records';
 import { DEFAULT_PRICING, calculatePricing, scalePricingInputs, PRICING_LABELS, type PricingField, type PricingInputs } from './lib/pricing';
-import { validateCustomerForm, validateExpenseForm, validateNoteForm, validateOrderForm, validatePostForm, validateProductForm, type FieldErrors } from './lib/validation';
+import { validateLicenseEmail, validateCustomerForm, validateExpenseForm, validateNoteForm, validateOrderForm, validatePostForm, validateProductForm, type FieldErrors } from './lib/validation';
 
 type Product = {
   id: string;
@@ -380,7 +380,11 @@ function App() {
     } catch(err) {setAdminLicenseError(err instanceof Error ? err.message : 'Could not load licenses.');}
     finally {setAdminLicenseBusy(false);}
   };
+  const [adminLicenseEmailError, setAdminLicenseEmailError] = useState('');
   const issueAdminLicense = async () => {
+    const emailProblem = validateLicenseEmail(adminLicenseEmail);
+    setAdminLicenseEmailError(emailProblem);
+    if (emailProblem) { setAdminLicenseError(''); window.setTimeout(() => document.getElementById('license-buyer-email')?.focus(), 0); return; }
     setAdminLicenseBusy(true);setAdminLicenseError('');setAdminLicenseKey('');
     try {
       const result = await api.post('/api/admin/licenses',{email:adminLicenseEmail.trim().toLowerCase()});
@@ -454,18 +458,25 @@ function App() {
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [productQuery, setProductQuery] = useState('');
   const [productSearchOpen, setProductSearchOpen] = useState(false);
+  const loadedImageIds=useRef<Set<string>>(new Set());
+  const productIdsKey=data.products.map(p=>p.id).join('|');
   useEffect(()=>{
-    if (!user || !data.products.length) {setProductImages({});return;}    let active=true;
-    const products=data.products;
-    Promise.all(products.map(async p=>{
+    if (!user || !data.products.length) {loadedImageIds.current=new Set();setProductImages({});return;}
+    let active=true;
+    // Only ask the server for images we have not loaded yet (R-08: previously every product was re-fetched after any product save/archive).
+    const missing=data.products.filter(p=>!loadedImageIds.current.has(p.id));
+    if(!missing.length)return;
+    Promise.all(missing.map(async p=>{
       try {        const result=await api.get('/api/product-image/'+encodeURIComponent(p.id));
         return [p.id,result.data.url||null] as const;
       } catch {return [p.id,null] as const;}
     })).then(results=>{
-      if(active)setProductImages(Object.fromEntries(results));
+      if(!active)return;
+      results.forEach(([id])=>loadedImageIds.current.add(id));
+      setProductImages(prev=>({...prev,...Object.fromEntries(results)}));
     });
     return ()=>{active=false;};
-  },[user,data.products]);
+  },[user,productIdsKey]);
   const [draftItems,setDraftItems]=useState<OrderItem[]>([]);
   const pickerRef=useRef<HTMLDivElement>(null);
   useEffect(()=>{
@@ -732,9 +743,18 @@ function App() {
   const save = async (next: Store) => {
     if (!user) throw new Error('Please sign in.');
     setSaving(true);
+    const timing = localStorage.getItem('sbcc_debug_timing') === '1';
+    const t0 = performance.now();
     try {
       await api.put('/api/workspace', next);
+      const t1 = performance.now();
       setData(next);
+      if (timing) requestAnimationFrame(() => requestAnimationFrame(() => {
+        const t2 = performance.now();
+        const entry = { at: new Date().toISOString(), bytes: JSON.stringify(next).length, putRoundTripMs: Math.round(t1 - t0), renderAfterSaveMs: Math.round(t2 - t1), totalMs: Math.round(t2 - t0) };
+        ((window as unknown as { __sbccSaveTimings?: unknown[] }).__sbccSaveTimings ||= []).push(entry);
+        console.info('[sbcc timing] save', entry);
+      }));
     } finally { setSaving(false); }
   };
 
@@ -1662,7 +1682,7 @@ function App() {
           <div className="header-actions" ref={headerMenuRef}>
             <div className="header-menu-anchor">
               <button type="button" className="theme-toggle notification-toggle" title="Planned order notifications"
-                aria-label={'Notifications: '+reminderCount+' planned orders due soon'}
+                aria-label={'Notifications: '+plural(reminderCount,'planned order')+' due soon'}
                 aria-expanded={headerMenu==='notifications'}
                 onClick={()=>setHeaderMenu(menu=>menu==='notifications'?null:'notifications')}>
                 <Bell size={21}/>
@@ -1840,9 +1860,15 @@ function App() {
                   {isLicenseAdmin && <div className="pilot-license-panel">
                     <h4>License administration</h4>
                     <p className="muted">Issue one-time license keys for verified buyer emails. Only the owner or authorized admin can access this panel.</p>
-                    <label className="field"><span>Buyer email</span>
-                      <input type="email" autoComplete="off" maxLength={254} placeholder="buyer@example.com" value={adminLicenseEmail} onChange={e=>setAdminLicenseEmail(e.target.value)}/></label>
-                    <button className="security-button" type="button" disabled={adminLicenseBusy||!adminLicenseEmail.trim()} onClick={()=>void issueAdminLicense()}>Issue license key</button>
+                    <div className={'field'+(adminLicenseEmailError?' has-error':'')}>
+                      <label htmlFor="license-buyer-email"><span>Buyer email<span className="required-mark" aria-hidden="true"> *</span><span className="sr-only"> (required)</span></span></label>
+                      <input id="license-buyer-email" type="email" autoComplete="off" maxLength={254} placeholder="buyer@example.com" value={adminLicenseEmail}
+                        aria-required="true" aria-invalid={adminLicenseEmailError?true:undefined} aria-describedby={adminLicenseEmailError?'license-buyer-email-error':undefined}
+                        onChange={e=>{setAdminLicenseEmail(e.target.value);if(adminLicenseEmailError)setAdminLicenseEmailError('');}}
+                        onBlur={()=>{if(adminLicenseEmail.trim())setAdminLicenseEmailError(validateLicenseEmail(adminLicenseEmail));}}/>
+                      {adminLicenseEmailError && <small id="license-buyer-email-error" className="field-error" role="alert">{adminLicenseEmailError}</small>}
+                    </div>
+                    <button className="security-button" type="button" disabled={adminLicenseBusy} onClick={()=>void issueAdminLicense()}>{adminLicenseBusy?'Issuing…':'Issue license key'}</button>
                     {adminLicenseKey && <div className="license-created">
                       <p><strong>New license key — shown once. Copy it now.</strong></p>
                       <code style={{overflowWrap:'anywhere'}}>{adminLicenseKey}</code>
@@ -1882,7 +1908,7 @@ function App() {
                   'Gross order value',
                   money(sales),
                   <ShoppingBag size={19} />,
-                  data.orders.length + ' orders'
+                  plural(data.orders.length, 'order')
                 )}
                 {stat(
                   'Net payments received',
@@ -2026,7 +2052,7 @@ function App() {
                     <Calculator size={18} /> Calculate price
                   </button>
                   <button onClick={() => open('Post')}>
-                    <CalendarDays size={18} /> Plan a post
+                    <CalendarDays size={18} /> Plan post
                   </button>
                 </div>
               </div>
@@ -2546,6 +2572,7 @@ function App() {
           onClose={()=>setInvoiceOrder(null)}>
             <div className="invoice-toolbar">
               <h2 id="invoice-preview-title">A4 Invoice Preview</h2>
+              {!profile.businessName.trim() && !logoUrl && <p className="invoice-setup-hint no-print" role="note">Tip: add your business name and logo in Profile to show them on invoices.</p>}
               <div>
                 <button className="invoice-download-btn" type="button" disabled={invoiceDownloading}
                   onClick={()=>void downloadInvoice()}><Download size={18}/>{invoiceDownloading?'Generating PDF…':'Download PDF'}</button>
@@ -2564,7 +2591,6 @@ function App() {
                     <div className="invoice-classic-brand">
                       {profile.businessName.trim() && <strong>{profile.businessName.trim()}</strong>}
                       {logoUrl && <img src={logoUrl} alt={(profile.businessName.trim() || 'Business') + ' logo'}/>}
-                      {!profile.businessName.trim() && !logoUrl && <span className="invoice-setup-hint no-print">Add your business name and logo in Profile so they appear here.</span>}
                     </div>
                   </div>
                   <div className="invoice-classic-info">
@@ -2681,7 +2707,7 @@ function App() {
         <Dialog titleId="record-modal-title" descId="record-modal-desc" className="modal record-modal" backdropDismiss={false} onClose={closeModal} initialFocusSelector="#record-name, #record-customer, #record-title, #record-platform">
             <div className="modalhead">
               <div>
-                <h2 id="record-modal-title">{editingId ? 'Edit ' : 'Add '}{modal.toLowerCase()}</h2>
+                <h2 id="record-modal-title">{editingId ? 'Edit ' : modal === 'Post' ? 'Plan ' : 'Add '}{modal.toLowerCase()}</h2>
                 <p id="record-modal-desc">Fields marked * are required. Nothing is saved until you press {editingId ? '“Save changes”' : '“Save”'}.</p>
               </div>
               <button type="button" className="close" aria-label={'Close ' + modal.toLowerCase() + ' form'} onClick={closeModal}>

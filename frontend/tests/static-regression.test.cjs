@@ -10,7 +10,7 @@ const dlg=fs.readFileSync(path.join(__dirname,'..','src','components','Dialog.ts
 test('F1: every modal goes through the shared accessible Dialog component',()=>{
   assert.equal((app.match(/<div className="modalback/g)||[]).length,0,'no hand-rolled backdrops remain');
   assert.ok((app.match(/<Dialog /g)||[]).length>=6);
-  for(const needle of ['role={role}','aria-modal="true"','aria-labelledby={titleId}','inert','Escape','nextTrappedFocus','trigger.focus']) assert.ok(dlg.includes(needle),needle);
+  for(const needle of ['role={role}','aria-modal="true"','aria-labelledby={titleId}','inert','Escape','nextTrappedFocus','scheduleRestore','target.focus']) assert.ok(dlg.includes(needle),needle);
   assert.ok(/backdropDismiss=\{false\}/.test(app),'destructive/form dialogs ignore backdrop clicks');
   assert.ok(app.includes('Discard unsaved changes?'));
   assert.ok(app.includes('aria-label={\'Close \' + modal.toLowerCase() + \' form\'}'));
@@ -43,4 +43,46 @@ test('F8: 44px touch-target rule exists for coarse pointers and tablets',()=>{
 test('F9: archive/delete flows persist through save() (no frontend-only state)',()=>{
   for(const fn of ['archiveProduct','archiveCustomer','deleteExpense','deletePost','deleteNote']) assert.ok(app.includes('const '+fn+' ='),fn);
   assert.ok(/runRecordAction = async[\s\S]*await save\(next\)/.test(app));
+});
+
+test('R-02: license email field is labelled, validated and announces errors',()=>{
+  for(const needle of ['id="license-buyer-email"','validateLicenseEmail(adminLicenseEmail)','id="license-buyer-email-error"','aria-describedby={adminLicenseEmailError']) assert.ok(app.includes(needle),needle);
+  assert.ok(!/disabled=\{adminLicenseBusy\|\|!adminLicenseEmail\.trim\(\)\}/.test(app),'button no longer silently disabled on empty email');
+});
+test('R-03: dashboard order count uses the plural helper',()=>{
+  assert.ok(app.includes("plural(data.orders.length, 'order')")); assert.ok(!/data\.orders\.length \+ ' orders'/.test(app));
+});
+test('R-04: Content Planner terminology is consistent (Plan post)',()=>{
+  assert.ok(app.includes("modal === 'Post' ? 'Plan ' : 'Add '")); assert.ok(!app.includes('Plan a post')); assert.ok(app.includes('Plan post</button>'));
+});
+test('R-05: setup hint sits in the screen-only toolbar, outside the printable page',()=>{
+  const printable=app.slice(app.indexOf('className="invoice-print-root"'));
+  assert.ok(!printable.slice(0,printable.indexOf('</Dialog>')).includes('invoice-setup-hint'),'hint must not be inside invoice-print-root');
+  const toolbar=app.slice(app.indexOf('className="invoice-toolbar"'),app.indexOf('className="invoice-print-root"'));
+  assert.ok(toolbar.includes('invoice-setup-hint'));
+});
+test('R-06: View all / View notes / dashboard links get 44px targets; dark back arrow styled',()=>{
+  assert.ok(/\.shell \.panelheader \.link,\.shell \.link\{[^}]*min-height:44px/.test(css));
+  assert.ok(/\.theme-dark \.sidebar-toggle\{/.test(css));
+});
+test('R-07: no literal whitespace/text nodes directly inside table structure',()=>{
+  const bad=[];
+  for(const m of app.matchAll(/<table\b[\s\S]*?<\/table>/g)){
+    const block=m[0];
+    for(const t of block.matchAll(/<\/(tr|thead|tbody|table)>[ \t]*(\{' '\}|[^<\s{)}][^<]*)/g)) bad.push(t[0].slice(0,40));
+    for(const t of block.matchAll(/<(tr|thead|tbody|table)\b[^>]*>[ \t]*(\{' '\}|[^<\s{][^<]*)/g)) bad.push(t[0].slice(0,40));
+    for(const t of block.matchAll(/<\/t[dh]>[ \t]*\{' '\}/g)) bad.push(t[0]);
+  }
+  assert.deepEqual(bad,[]);
+  for(const m of app.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)){
+    const top=m[1].replace(/<(td|th)\b[^>]*>[\s\S]*?<\/\1>/g,'').trim();
+    assert.equal(top,'','non-cell content directly in <tr>: '+top.slice(0,60));
+  }
+});
+test('R-08: product images are fetched once per product, not re-fetched on every product change',()=>{
+  assert.ok(app.includes('loadedImageIds')); assert.ok(app.includes('[user,productIdsKey]'));
+  assert.ok(app.includes("localStorage.getItem('sbcc_debug_timing') === '1'"));
+});
+test('R-01: Dialog restores focus via the shared planner (no bare trigger.focus timeout)',()=>{
+  assert.ok(dlg.includes('scheduleRestore(opener)')); assert.ok(dlg.includes('decideRestore')); assert.ok(!dlg.includes('setTimeout(() => trigger.focus(), 0)'));
 });

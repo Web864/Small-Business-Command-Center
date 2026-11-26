@@ -1,9 +1,66 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { FOCUSABLE_SELECTOR, nextTrappedFocus } from '../lib/dialog';
+import { FOCUSABLE_SELECTOR, decideRestore, focusAlreadyPlaced, nextTrappedFocus } from '../lib/dialog';
 
 // Module-level stack so only the top-most dialog reacts to Escape/Tab (nested dialogs).
 const stack: symbol[] = [];
 const BACKGROUND_SELECTOR = '[data-app-background]';
+
+type Opener = { el: HTMLElement | null; label: string; text: string; container: HTMLElement | null; order: number };
+let openerSeq = 0;
+const pending: Opener[] = [];
+let flushing = false;
+const isDisabled = (el: HTMLElement) => (el as HTMLButtonElement).disabled === true || el.getAttribute('aria-disabled') === 'true';
+const usable = (el: Element | null): el is HTMLElement => !!el && el.isConnected && !el.closest('[inert]');
+function describe(el: HTMLElement | null): Opener {
+  return { el, label: el?.getAttribute('aria-label') || '', text: (el?.textContent || '').trim().slice(0, 60),
+    container: el ? (el.closest('.catalog-grid, .notes-grid, table, .panel, section') as HTMLElement | null) : null, order: openerSeq++ };
+}
+/** Re-finds an opener that React re-rendered into a new DOM node (same accessible name). */
+function refind(o: Opener): HTMLElement | null {
+  if (o.el && o.el.isConnected) return o.el;
+  const scope: ParentNode = document.querySelector('main') || document;
+  if (o.label) { const hit = Array.from(scope.querySelectorAll<HTMLElement>('[aria-label]')).find(e => e.getAttribute('aria-label') === o.label); if (hit) return hit; }
+  if (o.text) { const hit = Array.from(scope.querySelectorAll<HTMLElement>('button')).find(e => (e.textContent || '').trim().slice(0, 60) === o.text); if (hit) return hit; }
+  return null;
+}
+function firstControlIn(container: HTMLElement | null): HTMLElement | null {
+  if (!container || !container.isConnected) return null;
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).find(e => usable(e) && !isDisabled(e)) || null;
+}
+function flushRestore(attempt = 0) {
+  // Another dialog is still open (e.g. a confirm closed on top of the form): leave focus to that dialog's own trap.
+  if (stack.length > 0) {
+    const roots = document.querySelectorAll<HTMLElement>('[data-dialog-root]');
+    const top = roots[roots.length - 1]?.querySelector<HTMLElement>('[role="dialog"],[role="alertdialog"]') || null;
+    const last = pending[pending.length - 1];
+    const back = last ? refind(last) : null;
+    pending.length = 0; flushing = false;
+    if (top && !top.contains(document.activeElement)) {
+      const target = back && top.contains(back) && usable(back) && !isDisabled(back) ? back : firstControlIn(top) || top;
+      target.focus();
+    }
+    return;
+  }
+  if (!pending.length) { flushing = false; return; }
+  // Earliest-opened dialog's opener wins: closing a confirm + its form together returns to the control that opened the form.
+  const sorted = [...pending].sort((a, b) => a.order - b.order);
+  if (focusAlreadyPlaced(document.activeElement, document.activeElement?.isConnected ?? false) && !(document.activeElement as HTMLElement | null)?.closest('[data-dialog-root]')) {
+    pending.length = 0; flushing = false; return;
+  }
+  const chosen = sorted.find(o => refind(o)) || sorted[0];
+  const trigger = refind(chosen);
+  const fallback = firstControlIn(chosen.container);
+  const step = decideRestore({ triggerConnected: !!trigger && usable(trigger), triggerDisabled: !!trigger && isDisabled(trigger), fallbackAvailable: !!fallback, attempt, maxAttempts: 30 });
+  if (step === 'wait') { window.setTimeout(() => flushRestore(attempt + 1), 50); return; }
+  pending.length = 0; flushing = false;
+  const main = document.getElementById('main-content');
+  const target = step === 'focus-trigger' ? trigger : step === 'focus-fallback' ? fallback : main;
+  target?.focus({ preventScroll: step === 'focus-main' });
+}
+function scheduleRestore(opener: Opener) {
+  pending.push(opener);
+  if (!flushing) { flushing = true; window.setTimeout(() => flushRestore(0), 0); }
+}
 
 function setInert(el: Element, on: boolean) {
   if (on) { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); }
@@ -36,7 +93,7 @@ export function Dialog({ titleId, descId, onClose, backdropDismiss = true, role 
 
   useEffect(() => {
     const token = Symbol('dialog');
-    const trigger = document.activeElement as HTMLElement | null;
+    const opener = describe(document.activeElement as HTMLElement | null);
     stack.push(token);
     queueMicrotask(syncBackground);
     const node = ref.current;
@@ -58,8 +115,8 @@ export function Dialog({ titleId, descId, onClose, backdropDismiss = true, role 
       const i = stack.indexOf(token);
       if (i >= 0) stack.splice(i, 1);
       syncBackground();
-      // Restore focus to the element that opened the dialog (if it is still on the page).
-      if (trigger && document.contains(trigger) && typeof trigger.focus === 'function') setTimeout(() => trigger.focus(), 0);
+      // Restore focus to the opener; waits while it is disabled, re-finds it after a re-render, and falls back safely.
+      scheduleRestore(opener);
     };
   }, [initialFocusSelector]);
 

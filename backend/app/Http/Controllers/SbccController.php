@@ -114,19 +114,28 @@ class SbccController extends Controller {
   if($error=$this->licensed($r))return $error;
   $input=$r->validate(['revision'=>'required|integer|min:0','data'=>'required|array']);
   if($error=$this->validateCollections($input['data']))return $this->fail($error,422);
+  $t0=hrtime(true);
   $this->workspaceFor($r->user());
-  return DB::transaction(function()use($r,$input){
+  $marks=[];
+  $response=DB::transaction(function()use($r,$input,$t0,&$marks){
    $row=DB::table('workspaces')->where('user_id',$r->user()->id)->lockForUpdate()->first();
+   $marks['lock']=(hrtime(true)-$t0)/1e6;
    // Stale-tab writes fail rather than overwriting another tab (compare-and-swap on revision).
    if(!$row||(int)$row->revision!==(int)$input['revision'])return $this->fail('Another tab saved changes. Reload before editing again.',409,'WORKSPACE_CONFLICT');
    $old=json_decode((string)$row->data,true)?:[];
    // Server-side record rules (archive flags, categories, SKU uniqueness, history protection). Never frontend-only.
-   if($violation=\App\Support\WorkspaceRules::validate($input['data'],$old))return $this->fail($violation,422,'RECORD_RULE');
+   $tr=hrtime(true);
+   $violation=\App\Support\WorkspaceRules::validate($input['data'],$old);
+   $marks['rules']=(hrtime(true)-$tr)/1e6;
+   if($violation)return $this->fail($violation,422,'RECORD_RULE');
    $changed=DB::table('workspaces')->where('user_id',$r->user()->id)->where('revision',$input['revision'])
      ->update(['data'=>json_encode($input['data'],JSON_THROW_ON_ERROR),'revision'=>DB::raw('revision + 1'),'updated_at'=>now()]);
    if(!$changed)return $this->fail('Another tab saved changes. Reload before editing again.',409,'WORKSPACE_CONFLICT');
    return response()->json(['saved'=>true,'revision'=>$input['revision']+1]);
   });
+  // Diagnostics only (durations in ms, no data): read via the browser's Network panel / Server-Timing.
+  $marks['total']=(hrtime(true)-$t0)/1e6;
+  return $response->header('Server-Timing',implode(', ',array_map(fn($k,$v)=>$k.';dur='.round($v,2),array_keys($marks),$marks)));
  }
  public function export(Request $r):JsonResponse {
   if($error=$this->licensed($r))return $error;
