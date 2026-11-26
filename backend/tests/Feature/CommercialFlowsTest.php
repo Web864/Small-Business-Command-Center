@@ -187,7 +187,7 @@ class CommercialFlowsTest extends TestCase
         $data=$this->blank();
         $data['products']=[['id'=>'p1','name'=>'Mug','price'=>12.5,'stock'=>4]];
         $data['orders']=[['id'=>'o1','customerId'=>'c1','total'=>25.0,'items'=>[['productId'=>'p1','qty'=>2]]]];
-        $data['expenses']=[['id'=>'e1','amount'=>3.25,'category'=>'Packaging']];
+        $data['expenses']=[['id'=>'e1','amount'=>3.25,'category'=>'Supplies']];
         $this->as($c)->getJson('/api/workspace')->assertOk();
         $this->putJson('/api/workspace',['revision'=>0,'data'=>$data])->assertOk()->assertJsonPath('revision',1);
         $this->postJson('/api/logout')->assertOk();

@@ -13,10 +13,10 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "jspdf": "4.2.1",
     "lucide-react": "^0.469.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "jspdf": "^2.5.2"
+    "react-dom": "^19.0.0"
   },
   "optionalDependencies": {
     "@rollup/rollup-linux-x64-gnu": "^4.0.0"
