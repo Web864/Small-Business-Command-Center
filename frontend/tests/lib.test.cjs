@@ -155,3 +155,36 @@ test('focus trap wraps in both directions and pulls stray focus back in',()=>{
   assert.equal(dialog.nextTrappedFocus(list,null,true),'c');
   assert.equal(dialog.nextTrappedFocus([],'a',false),null);
 });
+
+// ---------------- R-01 focus restoration ----------------
+test('R-01: focus restore waits for a disabled opener, then falls back safely',()=>{
+  const d=(o)=>dialog.decideRestore({triggerConnected:true,triggerDisabled:false,fallbackAvailable:true,attempt:0,maxAttempts:30,...o});
+  assert.equal(d({}),'focus-trigger');
+  assert.equal(d({triggerDisabled:true,attempt:3}),'wait');                       // save/archive still in flight
+  assert.equal(d({triggerDisabled:true,attempt:30}),'focus-fallback');            // never became enabled
+  assert.equal(d({triggerDisabled:true,attempt:30,fallbackAvailable:false}),'focus-main');
+  assert.equal(d({triggerConnected:false}),'focus-fallback');                     // opener unmounted (record moved to Archived)
+  assert.equal(d({triggerConnected:false,fallbackAvailable:false}),'focus-main'); // nothing else: main landmark, never BODY
+});
+test('R-01: user-placed focus is never stolen',()=>{
+  assert.equal(dialog.focusAlreadyPlaced({tagName:'BODY'},true),false);
+  assert.equal(dialog.focusAlreadyPlaced(null,true),false);
+  assert.equal(dialog.focusAlreadyPlaced({tagName:'BUTTON'},true),true);
+  assert.equal(dialog.focusAlreadyPlaced({tagName:'BUTTON'},false),false);
+});
+// ---------------- R-02 license email ----------------
+test('R-02: license buyer email validation messages',()=>{
+  assert.match(validation.validateLicenseEmail(''),/Enter the buyer/);
+  assert.match(validation.validateLicenseEmail('   '),/Enter the buyer/);
+  for(const bad of ['buyer','buyer@','@x.com','a b@x.com','a@b','a@@b.com','a@b.c']) assert.match(validation.validateLicenseEmail(bad),/valid email/,bad);
+  assert.match(validation.validateLicenseEmail('a'.repeat(250)+'@x.com'),/too long/);
+  for(const ok of ['buyer@example.com',' Buyer+tag@Sub.Example.co.uk ']) assert.equal(validation.validateLicenseEmail(ok),'');
+});
+// ---------------- R-03 grammar: zero / one / many orders ----------------
+test('R-03: order counts read correctly for 0, 1 and many',()=>{
+  assert.equal(records.plural(0,'order'),'0 orders');
+  assert.equal(records.plural(1,'order'),'1 order');
+  assert.equal(records.plural(2,'order'),'2 orders');
+  assert.equal(records.plural(1,'planned order'),'1 planned order');
+  assert.equal(records.plural(12,'planned order'),'12 planned orders');
+});

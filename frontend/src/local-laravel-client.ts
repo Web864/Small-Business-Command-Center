@@ -32,7 +32,14 @@ async function request<T=any>(method:string,path:string,payload?:unknown):Promis
   if(clean==='/api/fx/convert' && method==='POST')body={...(payload as object),revision};
   const headers:Record<string,string>={'Accept':'application/json','X-SBCC-Installation':deviceId};
   if(method!=='GET'){headers['Content-Type']='application/json';headers['X-CSRF-TOKEN']=await csrf();}
+  const startedAt=typeof performance!=='undefined'?performance.now():0;
   const response=await fetch(endpoint,{method,headers,credentials:'same-origin',body:method==='GET'?undefined:JSON.stringify(body??{})});
+  try{ // Opt-in diagnostics (localStorage.sbcc_debug_timing='1'): records request time + the server's Server-Timing header. No payloads are logged.
+    if(typeof localStorage!=='undefined'&&localStorage.getItem('sbcc_debug_timing')==='1'){
+      const log=((globalThis as any).__sbccApiTimings ||= []) as unknown[];
+      log.push({at:new Date().toISOString(),method,endpoint,status:response.status,headersMs:Math.round(performance.now()-startedAt),serverTiming:response.headers.get('Server-Timing')});
+    }
+  }catch{/* diagnostics must never affect requests */}
   const json=await response.json().catch(()=>({}));
   if(!response.ok){
     const message=json.error || json.message || ('Request failed with status code '+response.status);

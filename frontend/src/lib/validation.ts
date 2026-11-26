@@ -74,3 +74,12 @@ export function validateOrderForm(f: Record<string, string>, ctx: { lineCount: n
   if (f.status === 'Planned' && !f.scheduledDate) e.scheduledDate = 'Choose a scheduled date for a planned order.';
   return e;
 }
+
+/** Owner license-issue form (R-02). Client-side feedback only: the server still authorises and validates issuance. */
+export function validateLicenseEmail(raw: string): string {
+  const email = (raw ?? '').trim();
+  if (!email) return 'Enter the buyer\'s email address.';
+  if (email.length > 254) return 'Email address is too long (maximum 254 characters).';
+  if (/\s/.test(email) || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return 'Enter a valid email address, e.g. buyer@example.com.';
+  return '';
+}

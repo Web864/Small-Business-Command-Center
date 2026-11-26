@@ -2072,3 +2072,20 @@ main:focus{outline:none;}
   .no-print,.invoice-toolbar{display:none!important;}
   .invoice-classic-page{width:210mm!important;min-height:297mm!important;box-shadow:none!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
 }
+
+/* ===== Post-browser-test fixes (R-05, R-06, dark back arrow) ===== */
+/* Dark theme: the sidebar back-arrow/hamburger kept its light-mint light-theme colours (only .warm had an override). */
+.theme-dark .sidebar-toggle{background:#315a51;color:#d5faea;border-color:#468270;}
+.theme-dark .sidebar-toggle:hover{background:#3b6c61;}
+.theme-dark .custom-cover-header .sidebar-toggle{background:#ffffffe0;color:#1e645b;}
+/* R-05: setup tip lives in the screen-only toolbar, never in the printable page */
+.invoice-toolbar .invoice-setup-hint{flex:1 1 180px;max-width:none;margin:0;text-align:left;}
+/* R-06: "View all", "View notes", notification footer, search-clear buttons reach ~44px without extra visual padding */
+@media (pointer:coarse), (max-width:1024px){
+  .shell .panelheader .link,.shell .link{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:0 8px;margin:-8px -8px -8px 0;}
+  .shell .notification-view-all{min-height:44px;}
+  .shell .catalog-filter-wrap button,.shell .order-search-wrap button{min-width:44px;min-height:44px;display:inline-grid;place-items:center;}
+  .shell .dashboard-section-toggle,.shell .textbtn{min-height:44px;}
+  .shell .quickbuttons button{min-height:44px;}
+  .shell .notification-item{min-height:44px;}
+}
