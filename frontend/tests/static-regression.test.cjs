@@ -105,3 +105,10 @@ test('Fix6: invoice print CSS hides on-screen chrome and sets A4',()=>{
   const m=css.match(/@media print\{[\s\S]*$/m); assert.ok(css.includes('@page')); assert.ok(/\.no-print/.test(css));
   assert.ok(/size:\s*A4/i.test(css),'A4 page size declared');
 });
+
+test('per-page URLs: App uses history paths, not #hash, and keeps login redirect on /dashboard',()=>{
+  assert.ok(!app.includes('window.location.hash ='));  assert.ok(app.includes("'popstate'")); assert.ok(app.includes('pathForPage'));
+  const login=require('fs').readFileSync('../backend/public/local-login.html','utf8'); assert.ok(login.includes("location.assign('/dashboard')"));
+  assert.ok(require('fs').readFileSync('index.html','utf8').includes('noindex'),'SPA shell must be noindex');
+  const web=require('fs').readFileSync('../backend/routes/web.php','utf8'); assert.ok(web.includes('Site::APP_PATHS')&&web.includes('Pages::slugs()'));
+});

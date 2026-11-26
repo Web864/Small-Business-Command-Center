@@ -61,6 +61,7 @@ import { EXPENSE_CATEGORIES, POST_PLATFORMS, POST_STATUSES, activeOnly, archived
 import { DEFAULT_PRICING, calculatePricing, scalePricingInputs, PRICING_LABELS, type PricingField, type PricingInputs } from './lib/pricing';
 import { availableForOrder } from './lib/stock';
 import { decidePageChange } from './lib/navigation';
+import { pathForPage, resolveLocation } from './lib/routes';
 import { validateLicenseEmail, validateCustomerForm, validateExpenseForm, validateNoteForm, validateOrderForm, validatePostForm, validateProductForm, type FieldErrors } from './lib/validation';
 
 type Product = {
@@ -266,9 +267,12 @@ function Field({ name, label, type = 'text', options = [], form, change, require
     </div>
   );
 }
-const pageFromHash = () => {
-  const page = decodeURIComponent(window.location.hash.slice(1));
-  return nav.some(([name]) => name === page) ? page : 'Dashboard';
+const pageFromLocation = () => resolveLocation(window.location.pathname, window.location.hash).page ?? 'Dashboard';
+/** Each menu page has its own URL. push = new history entry (navigation); replace = canonicalise the current entry. */
+const writePageUrl = (page: string, mode: 'push' | 'replace') => {
+  const target = pathForPage(page);
+  if (window.location.pathname === target && !window.location.hash) return;
+  window.history[mode === 'push' ? 'pushState' : 'replaceState']({ page }, '', target);
 };
 
 function App() {
@@ -657,12 +661,15 @@ function App() {
     void restore();
     return () => { active = false; };
   }, []);
-  const [page, setPage] = useState(pageFromHash);
+  const [page, setPage] = useState(pageFromLocation);
   const [inAppNavigation, setInAppNavigation] = useState(false);
   useEffect(() => {
-    const onHashChange = () => setPage(pageFromHash());
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    // Canonicalise legacy `/#Orders` and bare `/` to the page's real path without adding a history entry.
+    writePageUrl(pageFromLocation(), 'replace');
+    const onLocationChange = () => { const next = pageFromLocation(); writePageUrl(next, 'replace'); setPage(next); };
+    window.addEventListener('popstate', onLocationChange);
+    window.addEventListener('hashchange', onLocationChange);
+    return () => { window.removeEventListener('popstate', onLocationChange); window.removeEventListener('hashchange', onLocationChange); };
   }, []);
   const [modal, setModal] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1200,10 +1207,10 @@ function App() {
     // Unsaved form: return to the page that owns it and ask first, so nothing is silently lost.
     const target = page;
     previousPageRef.current = previousPage;
-    window.location.hash = encodeURIComponent(previousPage);
+    writePageUrl(previousPage, 'push');
     setPage(previousPage);
     setConfirm({ title: 'Discard unsaved changes?', message: 'You have changes in this form that have not been saved. Leaving this page will discard them.', confirmLabel: 'Discard and leave', cancelLabel: 'Keep editing', danger: true,
-      onConfirm: () => { setModal(''); setErrors({}); setError(''); setOrderAction(null); setInvoiceOrder(null); window.location.hash = encodeURIComponent(target); setPage(target); } });
+      onConfirm: () => { setModal(''); setErrors({}); setError(''); setOrderAction(null); setInvoiceOrder(null); writePageUrl(target, 'push'); setPage(target); } });
   }, [page]);
   const orderDraftProduct = product(form.productId || '');
   const draftQuantity = Math.max(0, Number(form.qty) || 0);
@@ -1496,7 +1503,7 @@ function App() {
   const goto = (p: string) => {
     if (p !== page) {
       setInAppNavigation(true);
-      window.location.hash = encodeURIComponent(p);
+      writePageUrl(p, 'push');
       setPage(p);
     }
     setMobile(false);
@@ -1767,7 +1774,7 @@ function App() {
                 <button type="button" role="menuitem" className="account-option danger"
                   onClick={async () => {
                     setHeaderMenu(null);
-                    try { await auth.signOut(); setUser(null); setData(blank); window.location.hash = ''; }
+                    try { await auth.signOut(); setUser(null); setData(blank); window.location.assign('/'); }
                     catch (err) { setActionNotice(err instanceof Error ? err.message : 'Could not sign out.'); }
                   }}><LogOut size={18}/> Log Out</button>
               </div>}
@@ -1918,7 +1925,7 @@ function App() {
                   </div>}
                   {lastConversion && <p className="muted">{lastConversion}</p>}
                   <button className="signout" onClick={async () => {
-                    await auth.signOut();setUser(null);setData(blank);window.location.hash='';
+                    await auth.signOut();setUser(null);setData(blank);window.location.assign('/');
                   }}><LogOut size={17}/> Sign out</button>
                 </div>
               </div>

@@ -1,13 +1,16 @@
 <?php
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\SbccController as C;
-Route::get('/',function(){
- // Production serves the built React SPA (npm run build:laravel -> backend/public/spa). Local dev redirects to Vite.
- $spa=public_path('spa/index.html');
- if(is_file($spa))return response()->file($spa,['Content-Type'=>'text/html; charset=UTF-8','Cache-Control'=>'no-store']);
- if(app()->environment('local'))return redirect(config('app.frontend_url'));
- abort(503,'Frontend build is missing. Run the frontend build:laravel script before deploying.');
-});
+// Public marketing pages are server-rendered HTML so search engines and AI crawlers can read them without JavaScript.
+use App\Http\Controllers\MarketingController as M;
+use App\Support\Marketing\Pages;
+use App\Support\Marketing\Site;
+Route::get('/',[M::class,'page']);
+Route::get('/sitemap.xml',[M::class,'sitemap']);
+Route::get('/robots.txt',[M::class,'robots']);
+Route::get('/{slug}',[M::class,'page'])->whereIn('slug',Pages::slugs());
+// Each signed-in menu page has its own URL. Served with noindex; the SPA enforces authentication.
+Route::get('/{appPage}',[M::class,'app'])->whereIn('appPage',Site::APP_PATHS);
 Route::get('/app/{path}',function(string $path){abort_unless(in_array($path,['app.js','style.css'],true),404);return response()->file(public_path('app/'.$path));})->where('path','.*');
 Route::post('/api/register',[C::class,'register'])->middleware('throttle:5,1');
 Route::post('/api/login',[C::class,'login'])->middleware('throttle:8,1');
