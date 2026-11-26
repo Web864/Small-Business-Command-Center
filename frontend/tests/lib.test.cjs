@@ -228,3 +228,38 @@ test('Fix4: stock arithmetic for create/edit/cancel/complete/refund',()=>{
   // determinism / no mutation
   const before=JSON.stringify(orders); stock.availableForOrder(10,orders,P,'a'); assert.equal(JSON.stringify(orders),before);
 });
+
+// ---------------- Per-page URLs ----------------
+const routes = load('routes');
+test('routes: every menu page has its own path and resolves back',()=>{
+  const names=['Dashboard','Orders','Products','Customers','Expenses','Content Planner','Pricing Lab','Profile'];
+  const paths=names.map(n=>routes.pathForPage(n));
+  assert.equal(new Set(paths).size,names.length);                                 // all distinct
+  for(const n of names){ const r=routes.resolveLocation(routes.pathForPage(n),''); assert.equal(r.page,n); assert.equal(r.legacy,false); }
+  assert.equal(routes.pathForPage('Orders'),'/orders');
+  assert.equal(routes.resolveLocation('/Orders/','').page,'Orders');                // case + trailing slash tolerant
+});
+test('routes: legacy #hash links and unknown paths',()=>{
+  const l=routes.resolveLocation('/','#Orders'); assert.equal(l.page,'Orders'); assert.equal(l.legacy,true);
+  assert.equal(routes.resolveLocation('/','#Content%20Planner').page,'Content Planner');
+  assert.equal(routes.resolveLocation('/nope','').page,null);
+  assert.equal(routes.resolveLocation('/','#%E0%A4%A').page,null);                  // malformed escape never throws
+  assert.equal(routes.pathForPage('Unknown'),'/dashboard');
+});
+test('routes: front-end paths match the Laravel noindex list',()=>{
+  const php=fs.readFileSync(path.join(__dirname,'..','..','backend','app','Support','Marketing','Site.php'),'utf8');
+  const m=php.match(/APP_PATHS = \[([^\]]+)\]/)[1].match(/'([^']+)'/g).map(x=>x.slice(1,-1)).sort();
+  same(routes.APP_PATHS.map(p=>p.slice(1)).sort(),m);
+});
+// ---------------- Public pricing calculator ----------------
+test('public calculator matches the documented formula and the in-app default example',()=>{
+  const g={}; vm.runInNewContext(fs.readFileSync(path.join(__dirname,'..','..','backend','public','js','pricing-calculator.js'),'utf8'),{globalThis:g});
+  const r=g.sbccPricing.calc({cost:'8',pack:'2',ship:'3',desired:'10',fee:'6.5',fixed:'0.30'});
+  assert.equal(r.price,24.92); assert.equal(r.fees,1.92); assert.equal(r.profit,10);
+  assert.ok(g.sbccPricing.calc({cost:'',pack:'0',ship:'0',desired:'0',fee:'0',fixed:'0'}).error);
+  assert.ok(g.sbccPricing.calc({cost:'1',pack:'0',ship:'0',desired:'0',fee:'100',fixed:'0'}).error);
+  assert.ok(g.sbccPricing.calc({cost:'-1',pack:'0',ship:'0',desired:'0',fee:'0',fixed:'0'}).error);
+  assert.equal(g.sbccPricing.calc({cost:'0',pack:'0',ship:'0',desired:'0',fee:'0',fixed:'0'}).markup,null);
+  // agrees with the app's own calculator
+  const app=pricing.calculatePricing({pack:'2',ship:'3',desired:'10',fee:'6.5',fixed:'0.3'},8,null); assert.equal(app.price,r.price);
+});
