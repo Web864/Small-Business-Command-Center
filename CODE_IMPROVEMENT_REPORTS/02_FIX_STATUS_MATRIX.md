@@ -1,0 +1,15 @@
+# 02 — Fix Status Matrix
+
+Labels: **IMPLEMENTED** = code written. **TESTED** = an automated test that actually ran passed. **BROWSER VERIFIED** = a real browser exercised it. **BLOCKED** = could not be run here. Nothing below is BROWSER VERIFIED.
+
+| Fix ID | Problem | Files Modified | Status | Test Evidence |
+|---|---|---|---|---|
+| F1 | Modals lacked roles/names, Escape, focus trap/restore, inert background; backdrop could discard data | `components/Dialog.tsx`, `lib/dialog.ts`, `App.tsx`, `index.css` | IMPLEMENTED · PARTLY TESTED · BROWSER: NOT TESTED | Focus-trap helper unit test PASS (1); static regression PASS (no hand-rolled backdrops, required ARIA/Escape/inert/restore code present). Real focus behaviour, nested dialogs and mobile scrolling NOT TESTED (e2e spec written, unrun). |
+| F2 | No skip link / nav landmark / aria-current / live region / titles; native confirm/alert | `App.tsx`, `index.css` | IMPLEMENTED · PARTLY TESTED · BROWSER: NOT TESTED | Static regression PASS (markers present, no `window.confirm/alert`). Screen-reader behaviour NOT TESTED. |
+| F3 | Orders table clipped actions/amounts at 768–1024px | `App.tsx`, `index.css` | IMPLEMENTED · NOT TESTED | No executable test possible (visual/CSS). e2e overflow check written, unrun. Container queries need a real browser check. |
+| F4 | Inconsistent forms, no field errors, Tax alone in row | `App.tsx`, `lib/validation.ts`, `index.css` | IMPLEMENTED · TESTED (logic) · BROWSER: NOT TESTED | Validation unit tests PASS (product incl. duplicate SKU/allocated stock, customer, expense, post, note, order). Rendering/ARIA wiring NOT TESTED in browser. |
+| F5 | Silent clamping, no warnings, NaN risk | `lib/pricing.ts`, `App.tsx` | IMPLEMENTED · TESTED (logic) · BROWSER: NOT TESTED | 7 pricing unit tests PASS (formula parity, validation, NaN/Infinity, cent rounding, warnings, margin vs markup, currency scaling). |
+| F6 | Blue invoice, LOGO box, "My Business" | `App.tsx`, `index.css` | IMPLEMENTED · PARTLY TESTED · BROWSER: NOT TESTED | Static regression PASS (placeholders/blue/yellow constants gone). Generated PDF/print output NOT inspected. |
+| F7 | Hidden metrics, greeting, plurals, labels, no-results states, dark logo | `App.tsx`, `lib/records.ts`, `index.css` | IMPLEMENTED · PARTLY TESTED | Plural/greeting unit tests PASS; static regression PASS (microcopy, persistence key). **Gap:** no automated dashboard-calculation test (logic lives inside `App.tsx`); theme persistence was not changed and not re-tested. |
+| F8 | Touch targets < 44px | `index.css` | IMPLEMENTED · NOT TESTED | Static check that rule exists PASS; actual sizes NOT measured (e2e spec written, unrun). |
+| F9 | No archive/edit/delete for records; frontend-only risk | `App.tsx`, `lib/records.ts`, `SbccController.php`, `Support/WorkspaceRules.php` | IMPLEMENTED · SERVER RULES TESTED · HTTP/DB: NOT TESTED | 11 pure-PHP rule tests PASS (executed). Archive helper unit tests PASS. PHPUnit feature tests (8) written for the real endpoint — NOT EXECUTED (no vendor/PostgreSQL). |
