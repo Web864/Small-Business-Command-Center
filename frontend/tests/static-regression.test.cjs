@@ -86,3 +86,22 @@ test('R-08: product images are fetched once per product, not re-fetched on every
 test('R-01: Dialog restores focus via the shared planner (no bare trigger.focus timeout)',()=>{
   assert.ok(dlg.includes('scheduleRestore(opener)')); assert.ok(dlg.includes('decideRestore')); assert.ok(!dlg.includes('setTimeout(() => trigger.focus(), 0)'));
 });
+
+test('Fix2: license email focus runs after render via effect, not a bare timeout',()=>{
+  assert.ok(app.includes('licenseEmailFocusTick')); assert.ok(!app.includes("window.setTimeout(() => document.getElementById('license-buyer-email')"));
+});
+test('Fix1/3: Dialog keeps the original opener; App guards page changes and restores focus after record actions',()=>{
+  assert.ok(dlg.includes('resolveOpener')); assert.ok(dlg.includes('export function restoreFocusAfter'));
+  assert.ok(app.includes('decidePageChange')); assert.ok(app.includes('restoreFocusAfter(startedFrom)'));
+});
+test('Fix4: order picker and save validation share availableForOrder',()=>{
+  assert.ok((app.match(/availableForOrder\(/g)||[]).length>=2);
+});
+test('Fix5: CSRF token is cached (one GET per session, not per save)',()=>{
+  const c=require('fs').readFileSync('src/local-laravel-client.ts','utf8');
+  assert.ok(c.includes('if(csrfToken)return csrfToken;')); assert.equal((c.match(/fetch\('\/api\/csrf'/g)||[]).length,1);
+});
+test('Fix6: invoice print CSS hides on-screen chrome and sets A4',()=>{
+  const m=css.match(/@media print\{[\s\S]*$/m); assert.ok(css.includes('@page')); assert.ok(/\.no-print/.test(css));
+  assert.ok(/size:\s*A4/i.test(css),'A4 page size declared');
+});

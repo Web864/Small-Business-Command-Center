@@ -188,3 +188,43 @@ test('R-03: order counts read correctly for 0, 1 and many',()=>{
   assert.equal(records.plural(1,'planned order'),'1 planned order');
   assert.equal(records.plural(12,'planned order'),'12 planned orders');
 });
+
+// ---------------- Final regression: focus opener, navigation, stock ----------------
+const nav = load('navigation'), stock = load('stock');
+test('Fix1: StrictMode re-mount keeps the ORIGINAL opener, not a control inside the dialog',()=>{
+  assert.equal(dialog.resolveOpener('button-outside', true, 'input-inside'),'button-outside');   // 2nd mount, focus already in dialog
+  assert.equal(dialog.resolveOpener(null, true, 'x'),'x');                                        // first ever mount
+  assert.equal(dialog.resolveOpener('old', false, 'new'),'new');                                  // opened from somewhere else (nested confirm)
+});
+test('Fix1: restore plan covers Save/Discard/Archive/Restore/pristine close',()=>{
+  const d=(o)=>dialog.decideRestore({triggerConnected:true,triggerDisabled:false,fallbackAvailable:true,attempt:0,maxAttempts:30,...o});
+  assert.equal(d({}),'focus-trigger');                                 // pristine close, Save with opener still mounted
+  assert.equal(d({triggerDisabled:true}),'wait');                      // Save/Archive still in flight
+  assert.equal(d({triggerConnected:false}),'focus-fallback');          // Archive/Restore removed the card -> sibling control
+  assert.equal(d({triggerConnected:false,fallbackAvailable:false}),'focus-main'); // never BODY
+  assert.equal(dialog.focusAlreadyPlaced({tagName:'BODY'},true),false);
+});
+test('Fix3: page change closes clean dialogs and guards dirty ones',()=>{
+  const d=(o)=>nav.decidePageChange({previousPage:'Orders',page:'Dashboard',dialogOpen:true,dirty:false,...o});
+  assert.equal(d({}),'close');
+  assert.equal(d({dirty:true}),'revert-and-confirm');
+  assert.equal(d({dialogOpen:false}),'none');
+  assert.equal(d({page:'Orders'}),'none');
+});
+test('Fix4: stock arithmetic for create/edit/cancel/complete/refund',()=>{
+  const P='p1', o=(id,status,qty)=>({id,status,items:[{productId:P,qty}]});
+  assert.equal(stock.availableUnits(10,[],P),10);
+  assert.equal(stock.availableUnits(10,[o('a','New',1)],P),9);
+  assert.equal(stock.availableUnits(10,[o('a','Completed',1),o('b','Processing',2),o('c','Refunded',1)],P),6);   // completed/refunded keep stock out
+  assert.equal(stock.availableUnits(10,[o('a','Cancelled',3)],P),10);                                          // cancel releases
+  // editing order a (holds 1 of 10): Products shows 9, the order form may use 10 -> picker must match validation
+  const orders=[o('a','New',1)];
+  assert.equal(stock.availableUnits(10,orders,P),9);
+  assert.equal(stock.availableForOrder(10,orders,P,'a'),10);
+  assert.equal(stock.availableForOrder(10,orders,P,null),9);           // new order == Products page
+  assert.equal(stock.availableForOrder(10,[o('a','Cancelled',1)],P,'a'),10);
+  // legacy single-product order
+  assert.equal(stock.availableUnits(5,[{id:'z',status:'New',productId:P,qty:2}],P),3);
+  // determinism / no mutation
+  const before=JSON.stringify(orders); stock.availableForOrder(10,orders,P,'a'); assert.equal(JSON.stringify(orders),before);
+});

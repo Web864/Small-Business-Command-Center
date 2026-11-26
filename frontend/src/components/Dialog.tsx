@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { FOCUSABLE_SELECTOR, decideRestore, focusAlreadyPlaced, nextTrappedFocus } from '../lib/dialog';
+import { FOCUSABLE_SELECTOR, decideRestore, focusAlreadyPlaced, nextTrappedFocus, resolveOpener } from '../lib/dialog';
 
 // Module-level stack so only the top-most dialog reacts to Escape/Tab (nested dialogs).
 const stack: symbol[] = [];
@@ -57,6 +57,8 @@ function flushRestore(attempt = 0) {
   const target = step === 'focus-trigger' ? trigger : step === 'focus-fallback' ? fallback : main;
   target?.focus({ preventScroll: step === 'focus-main' });
 }
+/** Restore focus after a non-dialog action (e.g. Restore/Archive without a confirm) when the acting control may have unmounted. */
+export function restoreFocusAfter(el: HTMLElement | null) { if (el) scheduleRestore(describe(el)); }
 function scheduleRestore(opener: Opener) {
   pending.push(opener);
   if (!flushing) { flushing = true; window.setTimeout(() => flushRestore(0), 0); }
@@ -90,13 +92,16 @@ export function Dialog({ titleId, descId, onClose, backdropDismiss = true, role 
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const openerRef = useRef<Opener | null>(null);
 
   useEffect(() => {
     const token = Symbol('dialog');
-    const opener = describe(document.activeElement as HTMLElement | null);
+    const node = ref.current;
+    const active = document.activeElement as HTMLElement | null;
+    const opener = resolveOpener<Opener>(openerRef.current, !!(node && active && node.contains(active)), describe(active));
+    openerRef.current = opener;
     stack.push(token);
     queueMicrotask(syncBackground);
-    const node = ref.current;
     const focusables = () => Array.from<HTMLElement>(node ? node.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) : []).filter(el => el.offsetParent !== null || el === document.activeElement);
     const initial = (initialFocusSelector && node?.querySelector<HTMLElement>(initialFocusSelector)) || node?.querySelector<HTMLElement>('[data-autofocus]') || focusables()[0] || node;
     initial?.focus();

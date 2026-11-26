@@ -56,9 +56,11 @@ import {
   Archive,
 } from 'lucide-react';
 import { ChevronRight, ExternalLink } from 'lucide-react';
-import { Dialog, CloseButton, ConfirmDialog, type ConfirmState } from './components/Dialog';
+import { restoreFocusAfter, Dialog, CloseButton, ConfirmDialog, type ConfirmState } from './components/Dialog';
 import { EXPENSE_CATEGORIES, POST_PLATFORMS, POST_STATUSES, activeOnly, archivedOnly, customerHasHistory, expenseCategoryLabel, greetingName, isArchived, normalizeCategory, plural, productHasHistory, selectableCustomerNames, setArchived, setCustomerArchived } from './lib/records';
 import { DEFAULT_PRICING, calculatePricing, scalePricingInputs, PRICING_LABELS, type PricingField, type PricingInputs } from './lib/pricing';
+import { availableForOrder } from './lib/stock';
+import { decidePageChange } from './lib/navigation';
 import { validateLicenseEmail, validateCustomerForm, validateExpenseForm, validateNoteForm, validateOrderForm, validatePostForm, validateProductForm, type FieldErrors } from './lib/validation';
 
 type Product = {
@@ -381,10 +383,22 @@ function App() {
     finally {setAdminLicenseBusy(false);}
   };
   const [adminLicenseEmailError, setAdminLicenseEmailError] = useState('');
+  const [licenseEmailFocusTick, setLicenseEmailFocusTick] = useState(0);
+  // Focus the invalid field AFTER the error has rendered (a bare timeout can lose to the click's own focus change).
+  useEffect(() => {
+    if (!licenseEmailFocusTick) return;
+    let tries = 0;
+    const apply = () => {
+      const el = document.getElementById('license-buyer-email');
+      if (el && document.activeElement !== el) el.focus();
+      if (el && document.activeElement !== el && tries++ < 5) window.requestAnimationFrame(apply);
+    };
+    window.requestAnimationFrame(apply);
+  }, [licenseEmailFocusTick]);
   const issueAdminLicense = async () => {
     const emailProblem = validateLicenseEmail(adminLicenseEmail);
     setAdminLicenseEmailError(emailProblem);
-    if (emailProblem) { setAdminLicenseError(''); window.setTimeout(() => document.getElementById('license-buyer-email')?.focus(), 0); return; }
+    if (emailProblem) { setAdminLicenseError(''); setLicenseEmailFocusTick(t => t + 1); return; }
     setAdminLicenseBusy(true);setAdminLicenseError('');setAdminLicenseKey('');
     try {
       const result = await api.post('/api/admin/licenses',{email:adminLicenseEmail.trim().toLowerCase()});
@@ -1174,6 +1188,23 @@ function App() {
     }
     setModal(''); setErrors({}); setError('');
   };
+  // Page-specific dialogs must not survive a page change (browser Back/forward, hash edits, in-app links).
+  const previousPageRef = useRef(page);
+  useEffect(() => {
+    const previousPage = previousPageRef.current;
+    previousPageRef.current = page;
+    const dialogOpen = !!modal || !!orderAction || !!invoiceOrder;
+    const action = decidePageChange({ previousPage, page, dialogOpen, dirty: formDirty });
+    if (action === 'none') return;
+    if (action === 'close') { setModal(''); setErrors({}); setError(''); setOrderAction(null); setInvoiceOrder(null); return; }
+    // Unsaved form: return to the page that owns it and ask first, so nothing is silently lost.
+    const target = page;
+    previousPageRef.current = previousPage;
+    window.location.hash = encodeURIComponent(previousPage);
+    setPage(previousPage);
+    setConfirm({ title: 'Discard unsaved changes?', message: 'You have changes in this form that have not been saved. Leaving this page will discard them.', confirmLabel: 'Discard and leave', cancelLabel: 'Keep editing', danger: true,
+      onConfirm: () => { setModal(''); setErrors({}); setError(''); setOrderAction(null); setInvoiceOrder(null); window.location.hash = encodeURIComponent(target); setPage(target); } });
+  }, [page]);
   const orderDraftProduct = product(form.productId || '');
   const draftQuantity = Math.max(0, Number(form.qty) || 0);
   const draftSubtotal = Math.round(draftItems.reduce((sum,line)=>sum+line.unitPrice*line.qty,0)*100)/100;
@@ -1313,9 +1344,7 @@ function App() {
       }
       for(const line of draftItems) {
         const p=product(line.productId)!;
-        const returned=previous && previous.status!=='Cancelled'
-          ? orderItems(previous).filter(old=>old.productId===line.productId).reduce((sum,old)=>sum+old.qty,0) : 0;
-        const allowed=available(p)+returned;
+        const allowed=availableForOrder(p.stock,data.orders,p.id,previous?.id);
         if(line.qty>allowed){
           setError('Insufficient stock for '+p.name+'. Available for this order: '+allowed);
           return;
@@ -1403,6 +1432,8 @@ function App() {
   // ---- F9: server-persisted record management (every change goes through save() -> PUT /api/workspace) ----
   const runRecordAction = async (next: Store, successMessage: string, undo?: (current: Store) => Store) => {
     if (recordBusy || saving) return;
+    // Remember the control that started this action (unless it lives in a dialog, whose own restore handles that case).
+    const startedFrom = document.activeElement instanceof HTMLElement && !document.activeElement.closest('[data-dialog-root]') && document.activeElement !== document.body ? document.activeElement : null;
     setRecordBusy(true);
     try {
       await save(next);
@@ -1412,7 +1443,7 @@ function App() {
       announce('Not saved. ' + (err instanceof Error ? err.message : 'Please try again.'));
       setUndoAction(null);
       setActionNotice(err instanceof Error ? err.message : 'The change could not be saved.');
-    } finally { setRecordBusy(false); }
+    } finally { setRecordBusy(false); if (startedFrom) restoreFocusAfter(startedFrom); }
   };
   const archiveProduct = (p: Product, archived: boolean) => {
     const apply = () => void runRecordAction({ ...data, products: setArchived(data.products, p.id, archived) },
@@ -2775,7 +2806,7 @@ function App() {
                     {productSearchOpen&&<div className="product-results" role="listbox" aria-label="Matching products">
                       {productMatches.length ? productMatches.map(p=><button type="button" key={p.id}
                         onClick={()=>addDraftProduct(p)}>
-                        <span><b>{p.name}</b><small>{p.sku} · {available(p)} available</small></span>
+                        <span><b>{p.name}</b><small>{p.sku} · {availableForOrder(p.stock, data.orders, p.id, editingId)} available{editingId && availableForOrder(p.stock, data.orders, p.id, editingId) !== available(p) ? ' for this order' : ''}</small></span>
                         <strong>{money(p.price)} <Plus size={14}/></strong>                      </button>):<p>No matching products.</p>}
                     </div>}
                   </div>

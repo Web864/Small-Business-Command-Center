@@ -30,3 +30,13 @@ export function focusAlreadyPlaced(active: { tagName?: string } | null, isConnec
   const tag = (active.tagName || '').toUpperCase();
   return tag !== '' && tag !== 'BODY' && tag !== 'HTML';
 }
+
+/**
+ * Opener resolution. React StrictMode (dev) runs mount -> cleanup -> mount, and by the second mount focus has already
+ * moved INTO the dialog, so reading document.activeElement again would record a control inside the dialog as the
+ * "opener" (which unmounts, so focus then fell back to <main>). If this dialog already recorded an opener and focus is
+ * now inside the dialog itself, keep the original.
+ */
+export function resolveOpener<T>(stored: T | null, activeIsInsideOwnDialog: boolean, current: T): T {
+  return stored !== null && activeIsInsideOwnDialog ? stored : current;
+}
