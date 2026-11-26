@@ -7,8 +7,6 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->redirectGuestsTo(fn () => '/login');
         $middleware->append(\App\Http\Middleware\SecurityHeaders::class);
-        // Set TRUSTED_PROXIES (comma list or '*') when behind a TLS-terminating proxy/load balancer.
-        if (env('TRUSTED_PROXIES')) $middleware->trustProxies(at: env('TRUSTED_PROXIES') === '*' ? '*' : array_map('trim', explode(',', env('TRUSTED_PROXIES'))));
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(fn ($request, $exception) => $request->is('api/*') || $request->expectsJson());
