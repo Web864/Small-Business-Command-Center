@@ -16,7 +16,10 @@ class SbccController extends Controller {
  }
  private function blank():array {return array_fill_keys(self::COLLECTIONS,[]);}
  private function workspaceFor(User $user):Workspace {
-  return Workspace::firstOrCreate(['user_id'=>$user->id],['revision'=>0,'data'=>$this->blank()]);
+  try{return Workspace::firstOrCreate(['user_id'=>$user->id],['revision'=>0,'data'=>$this->blank()]);}
+  catch(\Illuminate\Database\QueryException $e){ // concurrent first request created it; PK conflict is benign
+   $existing=Workspace::where('user_id',$user->id)->first();if($existing)return $existing;throw $e;
+  }
  }
  protected function licensed(Request $r):?JsonResponse {
   $user=$r->user();if($user->isManager())return null;
@@ -31,6 +34,8 @@ class SbccController extends Controller {
   DB::table('audit_events')->insert(['actor_id'=>$actor?->id,'action'=>$event,'detail'=>json_encode($detail),'created_at'=>now(),'updated_at'=>now()]);
  }
  public function register(Request $r):JsonResponse {
+  // Normalize BEFORE the uniqueness check: stored emails are lowercase, so 'A@x.com' must collide with 'a@x.com'.
+  if(is_string($r->input('email')))$r->merge(['email'=>strtolower(trim($r->input('email')))]);
   $data=$r->validate(['email'=>'required|email|max:254|unique:users,email','password'=>'required|string|min:10|max:200']);
   $user=User::create(['email'=>strtolower(trim($data['email'])),'name'=>'','password'=>Hash::make($data['password'])]);
   $this->workspaceFor($user); return response()->json(['registered'=>true],201);
@@ -39,6 +44,16 @@ class SbccController extends Controller {
   $data=$r->validate(['email'=>'required|email','password'=>'required|string']);
   if(!Auth::attempt(['email'=>strtolower(trim($data['email'])),'password'=>$data['password']]))return $this->fail('Invalid email or password.',422);
   $r->session()->regenerate();return response()->json(['user'=>$this->publicUser($r->user()),'csrfToken'=>$r->session()->token()]);
+ }
+ public function changePassword(Request $r):JsonResponse {
+  $data=$r->validate(['current_password'=>'required|string|max:200','password'=>'required|string|min:10|max:200|different:current_password']);
+  $user=$r->user();
+  if(!Hash::check($data['current_password'],$user->password))return $this->fail('Current password is incorrect.',422);
+  $user->password=$data['password']; // 'hashed' cast
+  $user->save();
+  $r->session()->regenerate();
+  $this->audit($user,'account.password-change');
+  return response()->json(['changed'=>true]);
  }
  public function logout(Request $r):JsonResponse {Auth::logout();$r->session()->invalidate();$r->session()->regenerateToken();return response()->json(['loggedOut'=>true]);}
  private function publicUser(User $u):array{return ['id'=>$u->id,'email'=>$u->email,'name'=>$u->name,'role'=>$u->role];}
@@ -103,7 +118,6 @@ class SbccController extends Controller {
   $changed=DB::table('workspaces')->where('user_id',$r->user()->id)->where('revision',$input['revision'])
     ->update(['data'=>json_encode($input['data'],JSON_THROW_ON_ERROR),'revision'=>DB::raw('revision + 1'),'updated_at'=>now()]);
   if(!$changed)return $this->fail('Another tab saved changes. Reload before editing again.',409,'WORKSPACE_CONFLICT');
-  $this->audit($r->user(),'workspace.save',['from_revision'=>$input['revision']]);
   return response()->json(['saved'=>true,'revision'=>$input['revision']+1]);
  }
  public function export(Request $r):JsonResponse {

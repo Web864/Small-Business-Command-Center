@@ -60,6 +60,6 @@ export const api={
 };
 export const auth={
   async getUser():Promise<AuthUser|null>{const response=await fetch('/api/session',{credentials:'same-origin',headers:{Accept:'application/json'}});if(response.status===401)return null;if(!response.ok)throw new Error('Unable to restore local session.');const body=await response.json();csrfToken=null;revision=0;return {userId:String(body.user.id),email:body.user.email,name:body.user.name||body.user.email};},
-  async signInWithRedirect(){window.location.assign('/local-login');},
+  async signInWithRedirect(){window.location.assign('/login');},
   async signOut(){await request('POST','/api/logout');csrfToken=null;revision=0;},
 };

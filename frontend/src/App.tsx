@@ -634,6 +634,24 @@ function App() {
   const [catalogQuery,setCatalogQuery]=useState('');
   const globalSearchRef=useRef<HTMLDivElement>(null);
   const [passwordHelp, setPasswordHelp] = useState(false);
+  const [pwCurrent, setPwCurrent] = useState('');
+  const [pwNew, setPwNew] = useState('');
+  const [pwConfirm, setPwConfirm] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMessage, setPwMessage] = useState<{text:string;ok:boolean}|null>(null);
+  const closePasswordDialog = () => { setPasswordHelp(false); setPwCurrent(''); setPwNew(''); setPwConfirm(''); setPwMessage(null); };
+  const submitPasswordChange = async () => {
+    if (pwNew.length < 10) { setPwMessage({text:'New password must be at least 10 characters.',ok:false}); return; }
+    if (pwNew !== pwConfirm) { setPwMessage({text:'New password and confirmation do not match.',ok:false}); return; }
+    setPwBusy(true); setPwMessage(null);
+    try {
+      await api.post('/api/password', {current_password:pwCurrent, password:pwNew});
+      setPwCurrent(''); setPwNew(''); setPwConfirm('');
+      setPwMessage({text:'Password changed.',ok:true});
+    } catch (error: any) {
+      setPwMessage({text: error?.message || 'Could not change the password.', ok:false});
+    } finally { setPwBusy(false); }
+  };
   const [currencyModal, setCurrencyModal] = useState(false);
   const [currencyTarget, setCurrencyTarget] = useState('USD');
   const [fxQuote, setFxQuote] = useState<{from:string;to:string;rate:number;date:string;source:string}|null>(null);
@@ -649,7 +667,7 @@ function App() {
       if (headerMenuRef.current && !headerMenuRef.current.contains(event.target as Node)) setHeaderMenu(null);
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setHeaderMenu(null); setGlobalSearchOpen(false); setPasswordHelp(false); setLogoPreviewOpen(false); }
+      if (event.key === 'Escape') { setHeaderMenu(null); setGlobalSearchOpen(false); closePasswordDialog(); setLogoPreviewOpen(false); }
     };
     const closeSearch = (event:PointerEvent) => {
       if(globalSearchRef.current && !globalSearchRef.current.contains(event.target as Node))setGlobalSearchOpen(false);
@@ -2419,26 +2437,24 @@ function App() {
           </div>
         </div>
       )}
-      {passwordHelp && <div className="modalback" onMouseDown={() => setPasswordHelp(false)}>
+      {passwordHelp && <div className="modalback" onMouseDown={closePasswordDialog}>
         <div className="modal account-help" role="dialog" aria-modal="true" aria-labelledby="password-title"
           onMouseDown={event => event.stopPropagation()}>
           <div className="modalhead"><h2 id="password-title">Change Password</h2>
-            <button className="close" type="button" aria-label="Close" onClick={() => setPasswordHelp(false)}><X size={20}/></button>
+            <button className="close" type="button" aria-label="Close" onClick={closePasswordDialog}><X size={20}/></button>
           </div>
-          <p>Command Center uses Google, Apple, X or passwordless email sign-in. It does not store its own password.</p>
-          <p>Select the provider you use to open its official account-security page:</p>
-          <div className="password-provider-links">
-            <a href="https://myaccount.google.com/intro/signinoptions/password" target="_blank" rel="noopener noreferrer">
-              Google — change password <ExternalLink size={15}/>
-            </a>
-            <a href="https://account.apple.com/" target="_blank" rel="noopener noreferrer">              Apple — account security <ExternalLink size={15}/>
-            </a>
-            <a href="https://help.x.com/en/managing-your-account/forgotten-or-lost-password-reset" target="_blank" rel="noopener noreferrer">
-              X — password help <ExternalLink size={15}/>
-            </a>
+          <p>Enter your current password, then choose a new one (at least 10 characters).</p>
+          <label className="field">Current password
+            <input type="password" autoComplete="current-password" maxLength={200} value={pwCurrent} onChange={e=>setPwCurrent(e.target.value)}/></label>
+          <label className="field">New password
+            <input type="password" autoComplete="new-password" maxLength={200} value={pwNew} onChange={e=>setPwNew(e.target.value)}/></label>
+          <label className="field">Confirm new password
+            <input type="password" autoComplete="new-password" maxLength={200} value={pwConfirm} onChange={e=>setPwConfirm(e.target.value)}/></label>
+          {pwMessage && <p role="alert" style={{color: pwMessage.ok ? '#1b6e5c' : '#bc2020'}}>{pwMessage.text}</p>}
+          <div className="currency-actions">
+            <button type="button" className="action-cancel" disabled={pwBusy} onClick={closePasswordDialog}>{pwMessage?.ok ? 'Close' : 'Cancel'}</button>
+            <button type="button" className="primary" disabled={pwBusy || !pwCurrent || !pwNew || !pwConfirm} onClick={() => void submitPasswordChange()}>{pwBusy ? 'Saving…' : 'Change password'}</button>
           </div>
-          <p className="passwordless-note"><b>Email-link sign-in:</b> No password is used. Each sign-in is verified with a link sent to your email.</p>
-          <button type="button" className="primary" onClick={() => setPasswordHelp(false)}>Close</button>
         </div>
       </div>}
       {modal && (
